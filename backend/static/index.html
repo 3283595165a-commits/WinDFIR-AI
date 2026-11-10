@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinDFIR-AI | 智能 Windows 应急响应与威胁狩猎作战台</title>
+  <!-- 优先加载本地 static/vendor/ 离线资源，断网内网环境零白屏；若本地缺失则自动回退 CDN -->
+  <script src="/static/vendor/tailwindcss.js" onerror="this.src='https://cdn.tailwindcss.com'"></script>
+  <script src="/static/vendor/vue.global.prod.js" onerror="this.src='https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js'"></script>
+  <script src="/static/vendor/g6.min.js" onerror="this.src='https://gw.alipayobjects.com/os/lib/antv/g6/4.8.24/dist/g6.min.js'"></script>
+  <script src="/static/vendor/marked.min.js" onerror="this.src='https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js'"></script>
+  <style>
+    [v-cloak] { display: none !important; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090d16; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .cyber-grid {
+      background-color: #070b14;
+      background-image: radial-gradient(rgba(56, 189, 248, 0.08) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+      color: #38bdf8; font-weight: 700; margin-top: 0.9rem; margin-bottom: 0.45rem;
+    }
+    .markdown-body h1 { font-size: 1.05rem; border-bottom: 1px solid #1e293b; padding-bottom: 0.3rem; }
+    .markdown-body h2 { font-size: 0.92rem; }
+    .markdown-body h3 { font-size: 0.85rem; color: #7dd3fc; }
+    .markdown-body p, .markdown-body li { font-size: 0.78rem; line-height: 1.55; color: #cbd5e1; }
+    .markdown-body ul, .markdown-body ol { padding-left: 1.1rem; margin-bottom: 0.6rem; list-style: disc; }
+    .markdown-body code {
+      background: #0f172a; color: #f43f5e; padding: 0.1rem 0.3rem; border-radius: 3px;
+      font-family: Consolas, Monaco, monospace; font-size: 0.74rem;
+    }
+    .markdown-body pre {
+      background: #090d16; border: 1px solid #1e293b; padding: 0.6rem; border-radius: 6px;
+      overflow-x: auto; margin: 0.5rem 0;
+    }
+    .markdown-body pre code { background: transparent; color: #a7f3d0; padding: 0; }
+    .markdown-body table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.74rem; }
+    .markdown-body th, .markdown-body td { border: 1px solid #1e293b; padding: 0.35rem 0.5rem; text-align: left; }
+    .markdown-body th { background: #0f172a; color: #94a3b8; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased selection:bg-cyan-500 selection:text-slate-950 overflow-hidden h-screen flex flex-col">
+  <div id="app" v-cloak class="flex flex-col h-screen w-screen overflow-hidden">
+
+    <!-- 全局浮动通知 Toast -->
+    <div v-if="toast.show" class="fixed top-16 right-6 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-lg shadow-2xl border text-xs font-medium transition-all"
+         :class="{
+           'bg-emerald-950/95 border-emerald-500/60 text-emerald-200': toast.type === 'success',
+           'bg-rose-950/95 border-rose-500/60 text-rose-200': toast.type === 'error',
+           'bg-slate-900/95 border-cyan-500/60 text-cyan-200': toast.type === 'info'
+         }">
+      <span v-if="toast.type === 'success'">✅</span>
+      <span v-else-if="toast.type === 'error'">🚨</span>
+      <span v-else>⚡</span>
+      <span>{{ toast.message }}</span>
+    </div>
+
+    <!-- ======================= 顶部纯净多页导航栏 (Top Navigation Header) ======================= -->
+    <header class="h-16 bg-slate-900 border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
+      <!-- 左侧品牌标识 -->
+      <div class="flex items-center gap-3 shrink-0">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-700 flex items-center justify-center shadow-lg shadow-cyan-500/20 font-black text-slate-950 text-sm">
+          DF
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-bold tracking-wider text-base text-white">WinDFIR-AI</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono">v4.0</span>
+          </div>
+          <p class="text-[11px] text-slate-400 hidden 2xl:block">智能 Windows 应急响应与威胁狩猎作战台</p>
+        </div>
+      </div>
+
+      <!-- 中间：5 大独立全屏页面导航栏 -->
+      <nav class="flex items-center gap-2 h-full">
+        <button @click="switchPage('cases')"
+                class="h-10 px-4 rounded-lg text-xs font-bold flex items-center gap-2 transition"
+                :class="currentPage === 'cases' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/70'">
+          <span>📁 案件与主机管理</span>
+          <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px]">{{ cases.length }}</span>
+        </button>
+
+        <button @click="switchPage('topology')"
+                class="h-10 px-4 rounded-lg text-xs font-bold flex items-center gap-2 transition"
+                :class="currentPage === 'topology' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/70'">
+          <span>🕸️ 攻击链路拓扑</span>
+        </button>
+
+        <button @click="switchPage('timeline')"
+                class="h-10 px-4 rounded-lg text-xs font-bold flex items-center gap-2 transition"
+                :class="currentPage === 'timeline' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/70'">
+          <span>🕒 安全事件时间轴</span>
+          <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px]">{{ artifacts.length }}</span>
+        </button>
+
+        <button @click="switchPage('ai_report')"
+                class="h-10 px-4 rounded-lg text-xs font-bold flex items-center gap-2 transition"
+                :class="currentPage === 'ai_report' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/70'">
+          <span>🧠 AI 溯源与 0号病人画像</span>
+        </button>
+
+        <button @click="switchPage('remediation')"
+                class="h-10 px-4 rounded-lg text-xs font-bold flex items-center gap-2 transition"
+                :class="currentPage === 'remediation' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/70'">
+          <span>🛠️ 应急处置脚本</span>
+          <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px]">{{ remediationCards.length }}</span>
+        </button>
+      </nav>
+
+      <!-- 右侧：当前案件下拉切换框 + API 设置 -->
+      <div class="flex items-center gap-3 shrink-0">
+        <div class="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs">
+          <span class="text-slate-400 shrink-0">当前案件:</span>
+          <select :value="currentCaseId" @change="selectCase(Number($event.target.value))"
+                  class="bg-transparent text-cyan-300 font-semibold focus:outline-none max-w-[230px] truncate cursor-pointer">
+            <option v-for="c in cases" :key="c.id" :value="c.id" class="bg-slate-900 text-slate-100">
+              {{ c.case_code }} · {{ c.case_name }}
+            </option>
+          </select>
+        </div>
+
+        <button @click="openSettingsModal"
+                class="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition">
+          <span>⚙️</span> API 设置
+        </button>
+      </div>
+    </header>
+
+    <!-- ======================= 全屏独立页面主容器 (100% 屏幕宽度) ======================= -->
+    <main class="flex-1 flex flex-col overflow-hidden bg-slate-950">
+      <section class="flex-1 flex flex-col overflow-hidden w-full h-full">
+
+        <!-- ======================= 页面 1: 📁 案件与主机管理 (默认首页) ======================= -->
+        <div v-show="currentPage === 'cases'" class="flex-1 overflow-y-auto p-6 space-y-6 max-w-[1680px] w-full mx-auto">
+          <!-- 上半区：应急案件管理表 -->
+          <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl">
+            <div class="flex items-center justify-between mb-5">
+              <div>
+                <h2 class="text-base font-bold text-white flex items-center gap-2">
+                  <span>📁 应急响应案件管理表</span>
+                  <span class="text-xs px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-mono">共 {{ cases.length }} 个案件</span>
+                </h2>
+                <p class="text-xs text-slate-400 mt-1">选择任意案件切换为当前作战上下文，或一键载入三大行业典型攻击仿真样本进行红蓝对抗演练与汇报演示</p>
+              </div>
+              <div class="flex items-center gap-2.5">
+                <!-- 一键载入三大行业典型攻击仿真样本下拉菜单 -->
+                <div class="relative">
+                  <button @click="simMenuOpen = !simMenuOpen" :disabled="loading.simulating"
+                          class="px-4 py-2 rounded-xl bg-purple-600/25 hover:bg-purple-600/40 border border-purple-500/50 text-purple-200 text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-purple-600/15 transition">
+                    <span>🧪</span>
+                    <span>{{ loading.simulating ? '正在注入仿真日志...' : '载入实战仿真样本 ▾' }}</span>
+                  </button>
+                  <div v-if="simMenuOpen"
+                       class="absolute right-0 mt-2 w-80 rounded-xl bg-slate-900 border border-purple-500/40 shadow-2xl z-30 p-2 space-y-1 text-xs">
+                    <div class="px-2.5 py-1.5 text-[11px] text-purple-300 font-bold border-b border-slate-800">
+                      🎯 选择典型行业应急响应仿真剧本 (含完整 POC 载荷与多机横向链)
+                    </div>
+                    <button @click="loadSimulationCase('hospital')"
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-950/60 transition flex flex-col gap-0.5">
+                      <span class="font-bold text-white">🏥 医院勒索应急仿真 (Mallox 勒索 + 泛微 OA RCE)</span>
+                      <span class="text-[11px] text-slate-400">OA 前置机漏洞突破 → SMB 横向 HIS 数据库 → 卷影删除与勒索加密</span>
+                    </button>
+                    <button @click="loadSimulationCase('university')"
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-950/60 transition flex flex-col gap-0.5">
+                      <span class="font-bold text-white">🎓 高校挖矿木马仿真 (Log4j2 JNDI + XMRig 挖矿)</span>
+                      <span class="text-[11px] text-slate-400">Log4j2 远程注入 → Base64 内存无文件拉取 → 伪装服务与计划任务持久化</span>
+                    </button>
+                    <button @click="loadSimulationCase('enterprise')"
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-950/60 transition flex flex-col gap-0.5">
+                      <span class="font-bold text-white">🏢 政企域控失陷仿真 (向日葵 RCE + 域控 PTH 夺权)</span>
+                      <span class="text-[11px] text-slate-400">RDP 爆破与向日葵远控跳板 → LSASS 凭据转储 → 域控横向与 support$ 影子账号</span>
+                    </button>
+                  </div>
+                </div>
+
+                <button @click="modals.newCase = true"
+                        class="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-cyan-600/20 transition">
+                  <span>＋</span> 新建应急案件
+                </button>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="border-b border-slate-800 text-slate-400 bg-slate-950/60">
+                    <th class="py-3 px-4 font-semibold">案件编号</th>
+                    <th class="py-3 px-4 font-semibold">案件名称</th>
+                    <th class="py-3 px-4 font-semibold">客户行业场景</th>
+                    <th class="py-3 px-4 font-semibold">威胁等级</th>
+                    <th class="py-3 px-4 font-semibold">状态</th>
+                    <th class="py-3 px-4 font-semibold">指挥官</th>
+                    <th class="py-3 px-4 font-semibold text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/70">
+                  <tr v-for="c in cases" :key="c.id"
+                      @click="selectCase(c.id)"
+                      class="transition cursor-pointer"
+                      :class="currentCaseId === c.id ? 'bg-cyan-950/25 hover:bg-cyan-950/35' : 'hover:bg-slate-800/40'">
+                    <td class="py-3.5 px-4 font-mono font-bold text-cyan-400">
+                      <span v-if="currentCaseId === c.id" class="inline-block w-2 h-2 rounded-full bg-cyan-400 mr-1.5"></span>
+                      {{ c.case_code }}
+                    </td>
+                    <td class="py-3.5 px-4 font-semibold text-white">{{ c.case_name }}</td>
+                    <td class="py-3.5 px-4 text-slate-300">{{ industryMap[c.industry_type || 'enterprise'] || '🏢 政企/集团内网' }}</td>
+                    <td class="py-3.5 px-4">
+                      <span class="px-2 py-0.5 rounded font-mono text-[11px] font-bold uppercase"
+                            :class="{
+                              'bg-rose-500/20 text-rose-300 border border-rose-500/30': c.severity === 'critical',
+                              'bg-amber-500/20 text-amber-300 border border-amber-500/30': c.severity === 'high',
+                              'bg-blue-500/20 text-blue-300 border border-blue-500/30': c.severity !== 'critical' && c.severity !== 'high'
+                            }">{{ c.severity }}</span>
+                    </td>
+                    <td class="py-3.5 px-4">
+                      <span v-if="c.status === 'analyzed' || c.status === 'completed'" class="text-emerald-400 font-medium">● 已完成研判</span>
+                      <span v-else class="text-amber-400 font-medium">● 调查取证中</span>
+                    </td>
+                    <td class="py-3.5 px-4 text-slate-400 font-mono">{{ c.analyst || 'DFIR-Commander' }}</td>
+                    <td class="py-3.5 px-4 text-right space-x-2" @click.stop>
+                      <button @click="selectCase(c.id); switchPage('topology')"
+                              class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-cyan-600 text-cyan-300 hover:text-white border border-slate-700 transition font-medium">
+                        🕸️ 进入拓扑研判
+                      </button>
+                      <button @click="deleteCase(c)"
+                              class="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 transition font-medium">
+                        🗑️ 删除
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 下半区：当前案件受控主机资产表 -->
+          <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl">
+            <div class="flex items-center justify-between mb-5">
+              <div>
+                <h2 class="text-base font-bold text-white flex items-center gap-2">
+                  <span>🖥️ 当前案件受控主机资产表</span>
+                  <span v-if="currentCase" class="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-cyan-300 border border-slate-700 font-mono">
+                    所属案件: {{ currentCase.case_code }} ({{ currentCase.case_name }})
+                  </span>
+                </h2>
+                <p class="text-xs text-slate-400 mt-1">支持一键上传单台或多台受检主机的 .zip 离线取证包或 .evtx 日志，系统将自动提取主机名、内网 IP 并计算失陷风险分</p>
+              </div>
+              <button @click="modals.upload = true" :disabled="!currentCaseId"
+                      class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-blue-600/20 transition">
+                <span>📦</span> 上传取证包 (.zip / .evtx)
+              </button>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="border-b border-slate-800 text-slate-400 bg-slate-950/60">
+                    <th class="py-3 px-4 font-semibold">主机角色状态</th>
+                    <th class="py-3 px-4 font-semibold">受检主机名 (Hostname)</th>
+                    <th class="py-3 px-4 font-semibold">内网 IP 地址</th>
+                    <th class="py-3 px-4 font-semibold">操作系统版本</th>
+                    <th class="py-3 px-4 font-semibold">失陷风险评分</th>
+                    <th class="py-3 px-4 font-semibold">解析状态</th>
+                    <th class="py-3 px-4 font-semibold text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/70">
+                  <tr v-for="h in hosts" :key="h.id" class="hover:bg-slate-800/40 transition">
+                    <td class="py-3.5 px-4">
+                      <span v-if="h.is_patient_zero" class="px-2 py-0.5 rounded bg-pink-500/20 border border-pink-500/40 text-pink-300 text-[11px] font-bold">👑 0号病人</span>
+                      <span v-else-if="(h.risk_score || 0) < 40" class="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">🛡️ 安全基线</span>
+                      <span v-else class="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-bold">⚠️ 异常受控主机</span>
+                    </td>
+                    <td class="py-3.5 px-4 font-mono font-bold text-white text-sm">{{ h.hostname }}</td>
+                    <td class="py-3.5 px-4 font-mono text-cyan-300">{{ h.ip_address || '192.168.10.10' }}</td>
+                    <td class="py-3.5 px-4 text-slate-300">{{ h.os_version || 'Windows Server / Win10' }}</td>
+                    <td class="py-3.5 px-4 w-52">
+                      <div class="flex items-center gap-2">
+                        <div class="flex-1 bg-slate-800 h-2 rounded-full overflow-hidden">
+                          <div class="h-full rounded-full"
+                               :class="(h.risk_score || 0) >= 80 ? 'bg-gradient-to-r from-amber-500 to-rose-500' : ((h.risk_score || 0) >= 40 ? 'bg-amber-500' : 'bg-emerald-500')"
+                               :style="{ width: Math.max(8, Math.min(100, h.risk_score || 8)) + '%' }"></div>
+                        </div>
+                        <span class="font-mono font-bold w-12 text-right"
+                              :class="(h.risk_score || 0) >= 80 ? 'text-rose-400' : ((h.risk_score || 0) >= 40 ? 'text-amber-400' : 'text-emerald-400')">
+                          {{ h.risk_score }}/100
+                        </span>
+                      </div>
+                    </td>
+                    <td class="py-3.5 px-4 font-mono text-emerald-400">{{ h.parse_status }}</td>
+                    <td class="py-3.5 px-4 text-right space-x-2">
+                      <button @click="selectedHostId = h.id; switchPage('timeline')"
+                              class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-amber-600 text-amber-300 hover:text-white border border-slate-700 transition font-medium">
+                        🕒 查看主机时间轴
+                      </button>
+                      <button @click="deleteHost(h)"
+                              class="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 transition font-medium">
+                        🗑️ 删除主机
+                      </button>
+                    </td>
+                  </tr>
+                  <tr v-if="hosts.length === 0">
+                    <td colspan="7" class="py-10 text-center text-slate-500">
+                      当前案件暂未上传受检主机日志包，请点击右上角「📦 上传取证包 (.zip / .evtx)」导入数据
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ======================= 页面 2: 🕸️ 攻击链路拓扑 (独占全屏 100% 宽 · 80vh 高) ======================= -->
+        <div v-show="currentPage === 'topology'" class="flex-1 flex flex-col overflow-hidden p-4 bg-slate-950">
+          <div class="flex-1 rounded-xl border border-slate-800 flex flex-col relative cyber-grid overflow-hidden" style="min-height: 80vh;">
+            <div class="h-11 px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 overflow-x-auto">
+              <div class="flex items-center gap-2 whitespace-nowrap shrink-0">
+                <span class="text-xs font-bold text-cyan-400">🕸️ 全屏多机横向移动与失陷攻击链拓扑图 (AntV G6)</span>
+                <span class="text-[11px] text-slate-400 hidden lg:inline">| 自动聚合高危节点 (同类型≤8) · 滚轮缩放 / 拖拽画布</span>
+              </div>
+              <div class="flex items-center gap-3 text-[11px] whitespace-nowrap shrink-0">
+                <span class="flex items-center gap-1 whitespace-nowrap shrink-0"><i class="w-2.5 h-2.5 rounded-sm bg-rose-600 inline-block shrink-0"></i>攻击源IP</span>
+                <span class="flex items-center gap-1 whitespace-nowrap shrink-0"><i class="w-2.5 h-2.5 rounded-sm bg-pink-500 inline-block shrink-0"></i>0号病人</span>
+                <span class="flex items-center gap-1 whitespace-nowrap shrink-0"><i class="w-2.5 h-2.5 rounded-sm bg-purple-500 inline-block shrink-0"></i>高危进程[4688]</span>
+                <span class="flex items-center gap-1 whitespace-nowrap shrink-0"><i class="w-2.5 h-2.5 rounded-sm bg-orange-500 inline-block shrink-0"></i>恶意服务[7045]</span>
+                <span class="flex items-center gap-1 whitespace-nowrap shrink-0"><i class="w-2.5 h-2.5 rounded-sm bg-yellow-400 inline-block shrink-0"></i>影子账号[4720]</span>
+                <button @click="resetTopologyZoom" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 whitespace-nowrap shrink-0">重置全屏视图</button>
+              </div>
+            </div>
+
+            <!-- 当主机风险分低于 30 分且无高危攻击连线时，展示清爽的绿色安全状态提示 -->
+            <div v-if="isBaselineSafe"
+                 class="flex-1 flex flex-col items-center justify-center p-8 text-center bg-gradient-to-b from-emerald-950/20 to-slate-950/90">
+              <div class="w-16 h-16 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-3xl mb-3 shadow-lg shadow-emerald-500/10">
+                ✅
+              </div>
+              <h3 class="text-base font-bold text-emerald-300">✅ 当前主机系统基线正常，未检出高危攻击链路</h3>
+              <p class="text-xs text-slate-400 max-w-xl mt-2 leading-relaxed">
+                受检主机 <span class="font-mono text-emerald-300 font-semibold">{{ patientZero.hostname }}</span> 风险评分为
+                <span class="font-mono text-emerald-400 font-bold">{{ patientZero.risk_score || 5 }}/100</span>。
+                已解析的 {{ stats.totalEvents }} 条日志均为 Windows 常规系统驱动加载或正常业务活动，未发现暴力破解、Webshell 派生、PowerShell 混淆载荷或恶意服务持久化。
+              </p>
+              <button @click="switchPage('timeline')"
+                      class="mt-4 px-4 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold transition">
+                查看 {{ stats.totalEvents }} 条系统基线日志明细 →
+              </button>
+            </div>
+
+            <div v-show="!isBaselineSafe" id="g6-topology-canvas" class="flex-1 w-full h-full relative"></div>
+
+            <div v-if="!isBaselineSafe && topologyData.nodes.length === 0 && !loading.topology"
+                 class="absolute inset-0 top-11 flex flex-col items-center justify-center text-slate-500 text-xs pointer-events-none">
+              <p>暂无拓扑图节点，请先在「📁 案件与主机管理」页面上传取证包</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ======================= 页面 3: 🕒 安全事件时间轴 (独占全屏 + 分页器) ======================= -->
+        <div v-show="currentPage === 'timeline'" class="flex-1 flex flex-col overflow-hidden bg-slate-950">
+          <!-- 时间轴筛选工具栏 -->
+          <div class="h-12 px-5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 overflow-x-auto">
+            <div class="flex items-center gap-2.5 whitespace-nowrap shrink-0">
+              <span class="text-xs font-bold text-amber-400">⏱️ 全屏安全事件时间轴 (匹配 {{ filteredArtifacts.length }} / 总计 {{ artifacts.length }} 条)</span>
+              <span v-if="selectedHostId" class="text-[11px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 flex items-center gap-1">
+                已筛选单机 ID={{ selectedHostId }}
+                <button @click="selectedHostId = null" class="hover:text-white ml-1">✕</button>
+              </span>
+              <button @click="hideLowBaseline = !hideLowBaseline"
+                      class="px-2.5 py-1 rounded text-xs font-semibold border transition flex items-center gap-1.5"
+                      :class="hideLowBaseline
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'">
+                <span>{{ hideLowBaseline ? '👁️ 已隐藏 LOW 级常规基线 (' + lowBaselineCount + '条)' : '🔽 隐藏 LOW 级常规系统基线事件 (' + lowBaselineCount + '条)' }}</span>
+              </button>
+            </div>
+
+            <div class="flex items-center gap-2 text-xs whitespace-nowrap shrink-0">
+              <select v-model="selectedHostId" class="bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                <option :value="null">全部涉案主机 ({{ hosts.length }})</option>
+                <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.hostname }} ({{ h.ip_address }})</option>
+              </select>
+
+              <select v-model="filterEventId" class="bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                <option value="">全部 EventID</option>
+                <option value="4625">4625 - 登录失败/爆破</option>
+                <option value="4624">4624 - 登录成功</option>
+                <option value="4688">4688 - 进程创建/命令行</option>
+                <option value="7045">7045 - 服务安装持久化</option>
+                <option value="4720">4720 - 影子账号创建</option>
+              </select>
+
+              <select v-model="filterRiskLevel" class="bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                <option value="">全部风险等级</option>
+                <option value="critical">Critical (极危)</option>
+                <option value="high">High (高危)</option>
+                <option value="medium">Medium (中危)</option>
+                <option value="low">Low (低危/常规变更)</option>
+              </select>
+
+              <input v-model="searchKeyword" type="text" placeholder="搜索 IP / 账号 / 载荷关键字..."
+                     class="bg-slate-950 border border-slate-700 rounded px-3 py-1 text-xs text-slate-200 w-56 focus:outline-none focus:border-cyan-500" />
+            </div>
+          </div>
+
+          <!-- 时间轴事件卡片流 (当前页 paginatedArtifacts) -->
+          <div class="flex-1 overflow-y-auto p-5 space-y-2.5">
+            <div v-for="art in paginatedArtifacts" :key="art.id"
+                 @click="openArtifactDetail(art)"
+                 class="p-3.5 rounded-lg bg-slate-900/75 border border-slate-800 hover:border-slate-600 cursor-pointer transition-all relative pl-4">
+              <div class="absolute left-0 top-0 bottom-0 w-1 rounded-l-lg"
+                   :class="{
+                     'bg-rose-500': art.risk_level === 'critical',
+                     'bg-amber-500': art.risk_level === 'high',
+                     'bg-blue-500': art.risk_level === 'medium',
+                     'bg-emerald-600/70': art.risk_level === 'low' || !art.risk_level
+                   }"></div>
+
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="font-mono text-xs px-2 py-0.5 rounded font-bold"
+                        :class="{
+                          'bg-rose-500/20 text-rose-300 border border-rose-500/40': art.risk_level === 'critical',
+                          'bg-amber-500/20 text-amber-300 border border-amber-500/40': art.risk_level === 'high',
+                          'bg-blue-500/20 text-blue-300 border border-blue-500/40': art.risk_level === 'medium',
+                          'bg-slate-800 text-slate-300 border border-slate-700': art.risk_level === 'low' || !art.risk_level
+                        }">
+                    Event {{ art.event_id }} · {{ (art.risk_level || 'low').toUpperCase() }}
+                  </span>
+                  <span class="text-xs font-semibold text-slate-200">{{ eventTitleMap[art.event_id] || art.artifact_type }}</span>
+                  <span class="text-[11px] font-mono text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800/50">
+                    🖥️ {{ art.hostname }}
+                  </span>
+                  <span v-for="tag in (art.risk_tags || [])" :key="tag"
+                        class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                    # {{ tag }}
+                  </span>
+                </div>
+                <span class="font-mono text-[11px] text-slate-400 shrink-0">{{ formatTime(art.event_time) }} UTC</span>
+              </div>
+
+              <p class="text-xs text-slate-300 mt-1.5 font-mono leading-relaxed break-all">{{ art.summary }}</p>
+
+              <div v-if="art.decoded_payload" class="mt-2 p-2.5 rounded bg-rose-950/40 border border-rose-500/40 text-xs font-mono">
+                <div class="flex items-center justify-between text-[11px] text-rose-300 font-bold mb-1">
+                  <span>🔓 检测到 PowerShell -enc 混淆载荷 · 自动 Base64 解码明文还原：</span>
+                  <button @click.stop="copyScript(art.decoded_payload, '解码载荷明文')" class="text-[10px] px-1.5 py-0.5 rounded bg-rose-900/70 hover:bg-rose-800 text-rose-100">复制明文</button>
+                </div>
+                <div class="text-rose-200 break-all bg-slate-950/80 p-1.5 rounded border border-rose-900/60">{{ art.decoded_payload }}</div>
+              </div>
+
+              <div v-if="art.ai_analysis" class="mt-2 text-[11px] text-cyan-300 bg-cyan-950/30 border border-cyan-800/40 rounded px-2.5 py-1.5 leading-relaxed">
+                <b class="text-cyan-400">🤖 AI 研判：</b>{{ art.ai_analysis }}
+              </div>
+            </div>
+
+            <div v-if="filteredArtifacts.length === 0" class="text-center py-12 text-xs text-slate-500 space-y-2">
+              <div>当前筛选条件下暂无事件记录</div>
+              <button v-if="hideLowBaseline && lowBaselineCount > 0"
+                      @click="hideLowBaseline = false"
+                      class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700">
+                显示全部 {{ lowBaselineCount }} 条 LOW 级系统基线事件
+              </button>
+            </div>
+          </div>
+
+          <!-- 底部分页导航条 -->
+          <div class="h-12 px-5 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between text-xs shrink-0">
+            <div class="flex items-center gap-3 text-slate-400">
+              <span>共 <b class="text-white font-mono">{{ filteredArtifacts.length }}</b> 条匹配事件</span>
+              <span>|</span>
+              <label class="flex items-center gap-1.5">
+                <span>每页显示</span>
+                <select v-model.number="timelinePageSize" @change="timelinePage = 1"
+                        class="bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-xs text-slate-200">
+                  <option :value="15">15 条</option>
+                  <option :value="20">20 条</option>
+                  <option :value="50">50 条</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <button @click="timelinePage = 1" :disabled="timelinePage <= 1"
+                      class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 border border-slate-700">
+                ⏮ 首页
+              </button>
+              <button @click="timelinePage = Math.max(1, timelinePage - 1)" :disabled="timelinePage <= 1"
+                      class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 border border-slate-700">
+                ← 上一页
+              </button>
+              <span class="px-3 py-1 rounded bg-slate-950 border border-slate-800 font-mono text-cyan-300">
+                第 {{ timelinePage }} / {{ totalTimelinePages }} 页
+              </span>
+              <button @click="timelinePage = Math.min(totalTimelinePages, timelinePage + 1)" :disabled="timelinePage >= totalTimelinePages"
+                      class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 border border-slate-700">
+                下一页 →
+              </button>
+              <button @click="timelinePage = totalTimelinePages" :disabled="timelinePage >= totalTimelinePages"
+                      class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 border border-slate-700">
+                末页 ⏭
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ======================= 页面 4: 🧠 AI 溯源与 0号病人画像 (独占全屏) ======================= -->
+        <div v-show="currentPage === 'ai_report'" class="flex-1 flex flex-col overflow-y-auto p-5 gap-4 bg-slate-950">
+          <!-- 页面顶部操作栏：左标题 + 右上角【⚡ 触发 AI 推理】与【📄 导出 Word 报告】按钮 -->
+          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-3">
+              <span class="text-sm font-bold text-white">🧠 AI 全案溯源报告与 0号病人安全画像</span>
+              <span class="text-xs px-2.5 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">
+                {{ industryMap[currentCase?.industry_type || 'enterprise'] }}
+              </span>
+            </div>
+            <div class="flex items-center gap-2.5">
+              <button @click="triggerAiAnalysis"
+                      :disabled="loading.analyzing"
+                      class="px-4 py-1.5 rounded-lg bg-gradient-to-r from-rose-600 to-amber-500 hover:from-rose-500 hover:to-amber-400 text-white text-xs font-bold shadow-lg shadow-rose-600/20 flex items-center gap-1.5 transition disabled:opacity-50">
+                <span>⚡</span>
+                <span>{{ loading.analyzing ? 'AI 深度推理中...' : '触发 AI 推理' }}</span>
+              </button>
+
+              <button @click="exportWordReport"
+                      class="px-4 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition">
+                <span>📄</span>
+                <span>导出 Word 报告</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 专属卡片区：【🎯 漏洞利用链与攻击 POC 载荷还原 (CVE & Exploit Matching)】 -->
+          <div class="p-4 rounded-xl bg-slate-900/90 border border-rose-500/40 shadow-lg shrink-0">
+            <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold text-rose-300">🎯 漏洞利用链与攻击 POC 载荷还原 (CVE & Exploit Matching)</span>
+                <span class="text-[11px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 font-mono font-bold">
+                  命中 {{ cveMatches.length }} 个高危漏洞利用链
+                </span>
+              </div>
+              <span class="text-[11px] text-slate-400">自动从 Event 4688/7045 原始命令行提取 POC 载荷并匹配 CVE/CNVD 知识库</span>
+            </div>
+
+            <div v-if="cveMatches.length > 0" class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              <div v-for="(cve, idx) in cveMatches" :key="cve.cve_id + '_' + idx"
+                   class="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 hover:border-rose-500/50 transition space-y-2">
+                <div class="flex items-center justify-between gap-2 flex-wrap">
+                  <div class="flex items-center gap-2">
+                    <span class="px-2 py-0.5 rounded bg-rose-600 text-white font-mono text-xs font-bold shadow">
+                      {{ cve.cve_id }}
+                    </span>
+                    <span class="text-xs font-bold text-white">{{ cve.vuln_name }}</span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
+                      CVSS {{ cve.cvss }}
+                    </span>
+                    <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800/60">
+                      🖥️ {{ cve.host }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="text-[11px] text-slate-300">
+                  <b class="text-slate-400">受影响组件：</b><span class="font-mono text-amber-200">{{ cve.component }}</span>
+                  <span class="mx-2 text-slate-600">|</span>
+                  <b class="text-slate-400">利用机理：</b><span>{{ cve.principle }}</span>
+                </div>
+
+                <!-- 提取的原始 POC / EXP 载荷代码块 -->
+                <div class="p-2.5 rounded-lg bg-rose-950/35 border border-rose-500/40 font-mono text-xs">
+                  <div class="flex items-center justify-between text-[11px] text-rose-300 font-bold mb-1">
+                    <span>🔥 捕获的原始攻击载荷 (Extracted POC / Exploit Payload) [Event {{ cve.event_id }}]:</span>
+                    <button @click="copyScript(cve.extracted_poc, '攻击 POC 载荷')"
+                            class="text-[10px] px-2 py-0.5 rounded bg-rose-900/70 hover:bg-rose-700 text-rose-100">
+                      复制 POC
+                    </button>
+                  </div>
+                  <div class="text-rose-200 break-all bg-slate-950/90 p-2 rounded border border-rose-900/60">{{ cve.extracted_poc }}</div>
+                </div>
+
+                <div class="text-[11px] text-emerald-300 bg-emerald-950/30 border border-emerald-700/40 rounded-lg px-2.5 py-1.5 leading-relaxed">
+                  <b class="text-emerald-400">🛡️ 官方补丁与 WAF 临时封堵建议：</b>{{ cve.remediation }}
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="py-5 text-center text-xs text-slate-400">
+              ✅ 当前案件日志中未检出已知 CVE/CNVD 漏洞利用载荷（如永恒之蓝、Log4j2、泛微/用友 OA RCE、向日葵 RCE 等）
+            </div>
+          </div>
+
+          <!-- 下方双栏宽屏内容区 -->
+          <div class="flex-1 grid grid-cols-12 gap-4 min-h-[460px]">
+            <!-- 左栏 (5列)：0号病人/基线画像卡片 + IOC 威胁情报列表 -->
+            <div class="col-span-12 lg:col-span-5 flex flex-col gap-4">
+              <!-- 0号病人画像 / 主机安全基线画像卡片 -->
+              <div class="p-4 rounded-xl border shadow-lg shrink-0"
+                   :class="(patientZero.risk_score || 0) >= 40
+                     ? 'bg-gradient-to-br from-slate-900 via-slate-900 to-rose-950/30 border-pink-500/40'
+                     : 'bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/25 border-emerald-500/40'">
+                <div class="flex items-center justify-between mb-2.5">
+                  <span v-if="(patientZero.risk_score || 0) >= 40"
+                        class="px-2.5 py-0.5 rounded bg-pink-500/20 text-pink-300 border border-pink-500/40 text-xs font-bold">
+                    👑 0号病人画像 (Patient Zero)
+                  </span>
+                  <span v-else
+                        class="px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-bold">
+                    🛡️ 主机安全基线画像 (正常主机)
+                  </span>
+                  <span class="font-mono text-xs font-bold px-2.5 py-0.5 rounded border"
+                        :class="(patientZero.risk_score || 0) >= 40 ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'">
+                    风险评分: {{ patientZero.risk_score || 0 }}/100
+                  </span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2.5 text-xs bg-slate-950/70 p-3 rounded-lg border border-slate-800/80">
+                  <div>
+                    <span class="text-slate-400 block text-[11px]">目标主机名 / IP</span>
+                    <span class="font-mono font-bold text-white">{{ patientZero.hostname || 'N/A' }} ({{ patientZero.ip_address || 'N/A' }})</span>
+                  </div>
+                  <div>
+                    <span class="text-slate-400 block text-[11px]">首次告警/采集时间</span>
+                    <span class="font-mono text-amber-300">{{ patientZero.first_compromise_time || 'N/A' }}</span>
+                  </div>
+                  <div class="col-span-2">
+                    <span class="text-slate-400 block text-[11px]">初始突破口 (Entry Vector)</span>
+                    <span class="font-mono font-semibold" :class="(patientZero.risk_score || 0) >= 40 ? 'text-rose-300' : 'text-emerald-300'">
+                      {{ patientZero.entry_vector || '未检出明显外部突破口 (系统常规运行基线)' }}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- 勒索病毒家族特征识别与第三方远控软件（向日葵/ToDesk）高亮预警 -->
+                <div v-if="ransomwareRatAlerts.length > 0" class="mt-3 space-y-2">
+                  <div v-for="(alert, aIdx) in ransomwareRatAlerts" :key="aIdx"
+                       class="p-2.5 rounded-lg border text-xs"
+                       :class="alert.type === 'ransomware'
+                         ? 'bg-rose-950/50 border-rose-500/60 text-rose-200'
+                         : 'bg-amber-950/50 border-amber-500/60 text-amber-200'">
+                    <div class="flex items-center justify-between font-bold mb-1">
+                      <span>{{ alert.type === 'ransomware' ? '🚨 勒索病毒家族特征告警：' : '🛰️ 第三方远控跳板风险告警：' }}{{ alert.name }}</span>
+                      <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/40">🖥️ {{ alert.host }}</span>
+                    </div>
+                    <p class="text-[11px] leading-relaxed">{{ alert.decryptor_info }}</p>
+                  </div>
+                </div>
+
+                <div class="flex flex-wrap gap-1.5 mt-2.5">
+                  <span v-for="t in (patientZero.mitre_tactics || [])" :key="t"
+                        class="text-[10px] px-2 py-0.5 rounded bg-slate-950 text-cyan-300 border border-slate-800 font-mono">
+                    {{ t }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- 失陷指标 IOC 威胁情报列表 -->
+              <div class="flex-1 rounded-xl bg-slate-900/85 border border-slate-800 p-4 flex flex-col overflow-hidden">
+                <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800 shrink-0">
+                  <span class="text-xs font-bold text-cyan-300">🔍 失陷指标 IOC 威胁情报 ({{ iocs.length }})</span>
+                  <button @click="triggerIocEnrich" :disabled="loading.enriching"
+                          class="text-xs px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 font-semibold">
+                    {{ loading.enriching ? '查询中...' : '🔄 刷新微步/VT情报' }}
+                  </button>
+                </div>
+                <div class="flex-1 overflow-y-auto space-y-2.5 pr-1">
+                  <div v-for="ioc in iocs" :key="ioc.id" class="p-3 rounded-lg bg-slate-950/90 border border-slate-800">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-2">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 uppercase font-mono">{{ ioc.ioc_type }}</span>
+                        <span class="font-mono text-xs font-bold text-rose-400">{{ ioc.ioc_value }}</span>
+                      </div>
+                      <span class="text-[10px] px-1.5 py-0.5 rounded font-bold uppercase"
+                            :class="ioc.threat_level === 'malicious' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'bg-amber-500/20 text-amber-300'">
+                        {{ ioc.threat_level }} ({{ ioc.confidence }}%)
+                      </span>
+                    </div>
+                    <div class="flex flex-wrap gap-1 mt-2">
+                      <span v-for="tag in (ioc.tags || [])" :key="tag"
+                            class="text-[10px] px-1.5 py-0.5 rounded bg-rose-950/50 text-rose-200 border border-rose-800/50">
+                        {{ tag }}
+                      </span>
+                    </div>
+                    <div v-if="ioc.intel_detail && ioc.intel_detail.recommendation" class="mt-2 text-[11px] text-slate-400">
+                      💡 {{ ioc.intel_detail.recommendation }}
+                    </div>
+                  </div>
+                  <div v-if="iocs.length === 0" class="text-center py-10 text-xs text-slate-500">
+                    ✅ 当前案件未检出外部恶意 IP、C2 域名或恶意载荷 IOC 指标
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 右栏 (7列)：AI 深度溯源总结报告 (Marked.js) -->
+            <div class="col-span-12 lg:col-span-7 rounded-xl bg-slate-900/85 border border-slate-800 p-5 flex flex-col overflow-hidden">
+              <div class="flex items-center justify-between mb-3 pb-2.5 border-b border-slate-800 shrink-0">
+                <span class="text-xs font-bold text-rose-300">📑 AI 全案攻击链深度溯源分析报告 (Markdown)</span>
+                <span class="text-[11px] text-slate-400 font-mono">事件总数: {{ stats.totalEvents }} | 极危: {{ stats.criticalEvents }} | 解码载荷: {{ stats.decodedCount }}</span>
+              </div>
+              <div class="markdown-body flex-1 overflow-y-auto pr-2" v-html="renderedAiMarkdown"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ======================= 页面 5: 🛠️ 应急处置脚本 (独占全屏) ======================= -->
+        <div v-show="currentPage === 'remediation'" class="flex-1 overflow-y-auto p-5 space-y-5 bg-slate-950">
+          <!-- 顶部防复发持久化后门全量核查清单 (Checklist) -->
+          <div class="p-4 rounded-xl bg-slate-900/90 border border-cyan-500/40 shadow-lg">
+            <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-bold text-cyan-300">🛡️ 防复发持久化后门全量核查清单 (Anti-Recurrence Persistence Checklist)</span>
+                <span class="text-[11px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
+                  已核查确认 {{ persistenceChecklist.filter(i => i.checked).length }} / {{ persistenceChecklist.length }} 项
+                </span>
+              </div>
+              <span class="text-[11px] text-slate-400">解决企业/医院应急响应后“隔夜复发”痛点 · 点击复选框逐项确认闭环</span>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              <div v-for="item in persistenceChecklist" :key="item.id"
+                   @click="toggleChecklistItem(item)"
+                   class="p-3 rounded-xl border transition cursor-pointer flex flex-col justify-between gap-2"
+                   :class="item.detected
+                     ? 'bg-rose-950/30 border-rose-500/50 hover:border-rose-400'
+                     : (item.checked ? 'bg-emerald-950/20 border-emerald-500/40' : 'bg-slate-950/80 border-slate-800 hover:border-slate-700')">
+                <div>
+                  <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <div class="flex items-center gap-2">
+                      <input type="checkbox" :checked="item.checked" @click.stop="toggleChecklistItem(item)"
+                             class="w-4 h-4 rounded accent-cyan-500 cursor-pointer" />
+                      <span class="text-xs font-bold text-white" :class="item.checked ? 'line-through text-slate-400' : ''">{{ item.title }}</span>
+                    </div>
+                    <span class="text-[10px] px-2 py-0.5 rounded font-bold shrink-0"
+                          :class="item.detected
+                            ? 'bg-rose-500/25 text-rose-300 border border-rose-500/40'
+                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'">
+                      {{ item.status_label }}
+                    </span>
+                  </div>
+                  <p class="text-[11px] leading-relaxed" :class="item.detected ? 'text-rose-200 font-medium' : 'text-slate-400'">
+                    {{ item.detail }}
+                  </p>
+                </div>
+
+                <div class="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[10px] font-mono text-slate-400" @click.stop>
+                  <span class="truncate" :title="item.verify_cmd">{{ item.verify_cmd }}</span>
+                  <button @click="copyScript(item.verify_cmd, item.title + '排查命令')"
+                          class="px-2 py-0.5 rounded bg-slate-800 hover:bg-cyan-600 text-cyan-300 hover:text-white shrink-0 transition">
+                    复制核查命令
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/40 text-xs text-amber-200 leading-relaxed flex items-center justify-between">
+            <span>⚠️ <b>安全合规红线提示：</b> 为防止自动化误杀生产业务，以下遏制与修复脚本均采用<b>「人工审核后一键复制执行」</b>机制，请在受控主机管理员终端核对后运行。</span>
+            <span class="text-[11px] font-mono text-amber-300 shrink-0 ml-4">共 {{ remediationCards.length }} 项处置建议</span>
+          </div>
+
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div v-for="card in remediationCards" :key="card.id"
+                 class="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5 flex flex-col justify-between">
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-[11px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold">
+                    {{ card.category }}
+                  </span>
+                  <span class="text-[11px] font-mono uppercase text-rose-400 font-bold">{{ card.severity }}</span>
+                </div>
+                <div class="text-sm font-bold text-white">{{ card.title }}</div>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">{{ card.description }}</p>
+              </div>
+
+              <div class="space-y-2 pt-2">
+                <!-- CMD 脚本块 -->
+                <div class="bg-slate-950 rounded-lg p-2.5 border border-slate-800">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="text-[10px] font-mono text-amber-400 font-semibold">>_ CMD (管理员命令提示符)</span>
+                    <button @click="copyScript(card.cmd, 'CMD 修复命令')"
+                            class="text-[10px] px-2.5 py-0.5 rounded bg-slate-800 hover:bg-cyan-600 hover:text-white text-cyan-300 border border-slate-700 transition">
+                      📋 一键复制 CMD
+                    </button>
+                  </div>
+                  <pre class="text-[11px] font-mono text-slate-200 whitespace-pre-wrap break-all">{{ card.cmd }}</pre>
+                </div>
+
+                <!-- PowerShell 脚本块 -->
+                <div class="bg-slate-950 rounded-lg p-2.5 border border-slate-800">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="text-[10px] font-mono text-cyan-400 font-semibold">PS> PowerShell (管理员终端)</span>
+                    <button @click="copyScript(card.powershell, 'PowerShell 修复脚本')"
+                            class="text-[10px] px-2.5 py-0.5 rounded bg-slate-800 hover:bg-cyan-600 hover:text-white text-cyan-300 border border-slate-700 transition">
+                      📋 一键复制 PowerShell
+                    </button>
+                  </div>
+                  <pre class="text-[11px] font-mono text-cyan-200 whitespace-pre-wrap break-all">{{ card.powershell }}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+    <!-- ======================= 弹窗 1：新建应急案件 ======================= -->
+    <div v-if="modals.newCase" class="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="w-full max-w-md bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+        <div class="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white">＋ 新建应急响应案件</h3>
+          <button @click="modals.newCase = false" class="text-slate-400 hover:text-white text-sm">✕</button>
+        </div>
+        <div class="p-5 space-y-3.5 text-xs">
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">案件名称 *</label>
+            <input v-model="newCaseForm.case_name" type="text" placeholder="例如：某集团核心域控服务器遭受勒索与后门入侵事件"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-500" />
+          </div>
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">客户行业场景 (差异化加固策略) *</label>
+            <select v-model="newCaseForm.industry_type"
+                    class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-500">
+              <option value="hospital">🏥 医院/医疗卫健 (严禁中断HIS/核心业务，微隔离与防勒索优先)</option>
+              <option value="enterprise">🏢 政企/集团内网 (重点保护AD域控、防横向渗透与商业机密泄露)</option>
+              <option value="university">🎓 高校/科研机构 (重点排查挖矿木马、Webshell暗链与弱口令)</option>
+            </select>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-slate-300 mb-1 font-medium">威胁严重等级</label>
+              <select v-model="newCaseForm.severity" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100">
+                <option value="critical">Critical (极危)</option>
+                <option value="high">High (高危)</option>
+                <option value="medium">Medium (中危)</option>
+                <option value="low">Low (低危)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-300 mb-1 font-medium">应急响应指挥官</label>
+              <input v-model="newCaseForm.analyst" type="text"
+                     class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">案件背景描述</label>
+            <textarea v-model="newCaseForm.description" rows="3" placeholder="记录现场告警现象、受影响业务范围等..."
+                      class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100"></textarea>
+          </div>
+        </div>
+        <div class="px-5 py-3 bg-slate-950 border-t border-slate-800 flex justify-end gap-2 text-xs">
+          <button @click="modals.newCase = false" class="px-4 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700">取消</button>
+          <button @click="submitNewCase" class="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold">创建案件</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================= 弹窗 2：上传主机取证日志包 (.zip / .evtx) ======================= -->
+    <div v-if="modals.upload" class="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+        <div class="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white">📦 上传受控主机取证包 (.zip / .evtx)</h3>
+          <button @click="modals.upload = false" class="text-slate-400 hover:text-white text-sm">✕</button>
+        </div>
+        <div class="p-5 space-y-3.5 text-xs">
+          <div class="p-2 rounded-lg bg-cyan-950/30 border border-cyan-500/30 text-[11px] text-cyan-200">
+            💡 <b>智能提取提示：</b> 受检主机名与内网 IP 均为<b>选填项</b>，留空则自动从 <code>.evtx</code> 日志 <code>&lt;Computer&gt;</code> 字段或快照 JSON 中提取识别。
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-slate-300 mb-1 font-medium">受检主机名 <span class="text-slate-500 font-normal">(选填)</span></label>
+              <input v-model="uploadForm.hostname" type="text" placeholder="留空则从 .evtx <Computer> 自动提取"
+                     class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono placeholder:text-slate-600" />
+            </div>
+            <div>
+              <label class="block text-slate-300 mb-1 font-medium">主机内网 IP <span class="text-slate-500 font-normal">(选填)</span></label>
+              <input v-model="uploadForm.ip_address" type="text" placeholder="留空则从日志或快照自动识别"
+                     class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono placeholder:text-slate-600" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">操作系统版本</label>
+            <input v-model="uploadForm.os_version" type="text"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100" />
+          </div>
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">选择取证文件 (支持 .zip 压缩包或单文件 Security.evtx / System.evtx)</label>
+            <input type="file" accept=".zip,.evtx,.xml" @change="handleFileChange"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-slate-300 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-600 file:text-white file:text-xs" />
+            <p v-if="uploadForm.file" class="mt-1.5 text-emerald-400 font-mono">
+              已就绪文件: {{ uploadForm.file.name }} ({{ (uploadForm.file.size / 1024).toFixed(1) }} KB)
+            </p>
+          </div>
+        </div>
+        <div class="px-5 py-3 bg-slate-950 border-t border-slate-800 flex justify-end gap-2 text-xs">
+          <button @click="modals.upload = false" class="px-4 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700">取消</button>
+          <button @click="submitUploadEvidence" :disabled="loading.uploading"
+                  class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold flex items-center gap-1.5">
+            <span v-if="loading.uploading" class="animate-spin">⏳</span>
+            <span>{{ loading.uploading ? '流式解析 EVTX 中...' : '开始上传并自动解析' }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================= 弹窗 3：LLM 大模型与微步/VT 威胁情报 API 设置 ======================= -->
+    <div v-if="modals.settings" class="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="w-full max-w-xl bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+        <div class="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white">⚙️ 大模型 (LLM) 与微步在线 / VirusTotal API 配置</h3>
+          <button @click="modals.settings = false" class="text-slate-400 hover:text-white text-sm">✕</button>
+        </div>
+
+        <div class="p-5 space-y-4 text-xs max-h-[78vh] overflow-y-auto">
+          <div class="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/30 text-cyan-200 leading-relaxed">
+            💡 <b>离线/无 Key 自动兜底说明：</b> 若应急现场处于纯内网断网环境或未填写 API Key，系统将自动启用<b>「本地 DFIR 专家规则与载荷反混淆引擎」</b>完成全流程溯源报告生成；填写 Key 后将自动切换为真实云端大模型与微步在线情报查询。
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-slate-300 mb-1 font-medium">AI 模型服务商 (Provider)</label>
+              <select v-model="llmForm.provider" @change="onProviderChange"
+                      class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100">
+                <option value="deepseek">DeepSeek (深度求索)</option>
+                <option value="openai">OpenAI (GPT-4o)</option>
+                <option value="qwen">通义千问 (Qwen-Plus)</option>
+                <option value="ollama">本地离线大模型 (Ollama)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-300 mb-1 font-medium">模型标识 (Model Name)</label>
+              <input v-model="llmForm.model_name" type="text"
+                     class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">OpenAI 兼容接口 Base URL</label>
+            <input v-model="llmForm.base_url" type="text"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono" />
+          </div>
+
+          <div>
+            <div class="flex justify-between mb-1">
+              <label class="text-slate-300 font-medium">大模型 API Key</label>
+              <span v-if="llmForm.has_api_key" class="text-emerald-400">● 数据库已配置密钥</span>
+              <span v-else class="text-amber-400">● 当前使用本地专家引擎兜底</span>
+            </div>
+            <input v-model="llmForm.api_key" type="password" placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx (留空则保持原状态)"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono" />
+          </div>
+
+          <div class="border-t border-slate-800 pt-3 mt-2 space-y-3">
+            <div class="font-bold text-slate-200">🌐 外部威胁情报源 API 配置 (可选)</div>
+            <div>
+              <div class="flex justify-between mb-1">
+                <label class="text-slate-300 font-medium">微步在线 (ThreatBook) API Key</label>
+                <span v-if="llmForm.has_threatbook_key" class="text-emerald-400">● 已配置</span>
+              </div>
+              <input v-model="llmForm.threatbook_api_key" type="password" placeholder="输入微步在线 v3/scene/ip_reputation API Key"
+                     class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono" />
+            </div>
+            <div>
+              <div class="flex justify-between mb-1">
+                <label class="text-slate-300 font-medium">VirusTotal API Key</label>
+                <span v-if="llmForm.has_vt_key" class="text-emerald-400">● 已配置</span>
+              </div>
+              <input v-model="llmForm.vt_api_key" type="password" placeholder="输入 VirusTotal v3 API Key"
+                     class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono" />
+            </div>
+          </div>
+        </div>
+
+        <div class="px-5 py-3 bg-slate-950 border-t border-slate-800 flex justify-end gap-2 text-xs">
+          <button @click="modals.settings = false" class="px-4 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700">关闭</button>
+          <button @click="saveSettings" :disabled="loading.savingConfig"
+                  class="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold">
+            {{ loading.savingConfig ? '保存中...' : '保存配置并立即生效' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================= 弹窗 4：单条 EVTX 事件完整取证详情 ======================= -->
+    <div v-if="modals.eventDetail && activeArtifact" class="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+        <div class="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 font-mono text-xs font-bold">
+              Event {{ activeArtifact.event_id }}
+            </span>
+            <h3 class="text-sm font-bold text-white">{{ eventTitleMap[activeArtifact.event_id] }}</h3>
+          </div>
+          <button @click="modals.eventDetail = false" class="text-slate-400 hover:text-white text-sm">✕</button>
+        </div>
+        <div class="p-5 space-y-3 text-xs max-h-[75vh] overflow-y-auto">
+          <div class="text-slate-300 font-mono bg-slate-950 p-2.5 rounded border border-slate-800">{{ activeArtifact.summary }}</div>
+          <div v-if="activeArtifact.decoded_payload" class="p-3 rounded bg-rose-950/40 border border-rose-500/40 font-mono">
+            <div class="text-rose-300 font-bold mb-1">🔓 Base64 解码还原明文载荷：</div>
+            <div class="text-rose-100 break-all">{{ activeArtifact.decoded_payload }}</div>
+          </div>
+          <div>
+            <div class="text-slate-400 font-semibold mb-1">原始 EVTX 解析结构化字段 (JSON):</div>
+            <pre class="bg-slate-950 border border-slate-800 rounded p-3 font-mono text-[11px] text-cyan-200 overflow-x-auto">{{ JSON.stringify(activeArtifact.parsed_data, null, 2) }}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/static/app.js?v=5.0"></script>
+</body>
+</html>

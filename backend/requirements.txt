@@ -1,0 +1,22 @@
+# Web 框架与 ASGI 服务器
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12
+
+# 数据库与 SQLite 异步 ORM 驱动（免安装外部数据库，支持 PyInstaller 打包）
+sqlalchemy[asyncio]==2.0.35
+aiosqlite==0.22.1
+
+# 数据校验与环境变量管理
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+
+# Windows EVTX 日志解析与 XML 处理
+python-evtx==0.7.4
+lxml==5.3.0
+xmltodict==0.13.0
+
+# 异步文件操作与 HTTP 客户端（威胁情报与大模型调用）
+aiofiles==24.1.0
+httpx>=0.27.0

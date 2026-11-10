@@ -1,0 +1,36 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# ---- Build / packaging artifacts ----
+build/
+dist/
+*.spec
+*.exe
+
+# ---- Runtime data & sensitive forensic evidence (DO NOT COMMIT) ----
+backend/data/
+backend/storage/
+backend/uploads/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+Forensic_*.zip
+*.zip
+
+# ---- Environment / secrets ----
+.env
+!.env.example
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
