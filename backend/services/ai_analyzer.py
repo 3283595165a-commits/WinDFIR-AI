@@ -235,13 +235,71 @@ async def _call_openai_compatible_llm(
     user_prompt: str,
 ) -> Optional[str]:
     """
-    调用兼容 OpenAI Chat Completions 规范的大模型接口（支持 DeepSeek / OpenAI / Qwen / Ollama）
+    调用外部大模型接口，全面兼容：
+    1. OpenAI Chat Completions 协议（智谱 Coding Plan `paas/v4`、智谱标准 `paas/v4`、Google Gemini OpenAI 兼容层、Kimi/Moonshot、DeepSeek、通义千问、OpenAI、Ollama 等）
+    2. Anthropic Message 协议（智谱 Coding Plan `https://open.bigmodel.cn/api/anthropic`、Anthropic 官方 `https://api.anthropic.com`）
+    3. OpenAI Responses 协议（智谱 `https://open.bigmodel.cn/api/v1`）
     """
-    base_url = llm_cfg.base_url.rstrip("/")
-    url = f"{base_url}/chat/completions"
+    base_url = (llm_cfg.base_url or "").strip().rstrip("/")
+    sys_prompt = llm_cfg.system_prompt or DEFAULT_DFIR_SYSTEM_PROMPT
+    api_key = (llm_cfg.api_key or "").strip()
+
+    # 1. Anthropic Message 协议分支 (如 https://open.bigmodel.cn/api/anthropic 或 https://api.anthropic.com)
+    if "/anthropic" in base_url.lower() or "api.anthropic.com" in base_url.lower() or llm_cfg.provider == "anthropic":
+        if base_url.endswith("/v1/messages") or base_url.endswith("/messages"):
+            url = base_url
+        elif base_url.endswith("/v1"):
+            url = f"{base_url}/messages"
+        else:
+            url = f"{base_url}/v1/messages"
+
+        headers = {
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+        }
+        if api_key:
+            headers["x-api-key"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        payload = {
+            "model": llm_cfg.model_name,
+            "max_tokens": llm_cfg.max_tokens or 4096,
+            "temperature": llm_cfg.temperature,
+            "system": sys_prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                }
+            ],
+        }
+        try:
+            async with httpx.AsyncClient(timeout=75.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                blocks = data.get("content") or []
+                for blk in blocks:
+                    if isinstance(blk, dict) and blk.get("text"):
+                        return str(blk["text"]).strip()
+                return None
+        except Exception as exc:
+            logger.warning(f"调用 Anthropic 协议大模型 API ({llm_cfg.config_name} @ {url}) 失败，将自动切换本地专家引擎兜底: {exc}")
+            return None
+
+    # 2. Google Gemini 若用户只填了 https://generativelanguage.googleapis.com/v1beta，自动补齐 /openai
+    if "generativelanguage.googleapis.com" in base_url.lower() and "/openai" not in base_url.lower():
+        base_url = f"{base_url}/openai"
+
+    # 3. 标准 OpenAI Chat Completions 协议分支
+    if base_url.endswith("/chat/completions"):
+        url = base_url
+    else:
+        url = f"{base_url}/chat/completions"
+
     headers = {"Content-Type": "application/json"}
-    if llm_cfg.api_key:
-        headers["Authorization"] = f"Bearer {llm_cfg.api_key}"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     payload = {
         "model": llm_cfg.model_name,
@@ -250,7 +308,7 @@ async def _call_openai_compatible_llm(
         "messages": [
             {
                 "role": "system",
-                "content": llm_cfg.system_prompt or DEFAULT_DFIR_SYSTEM_PROMPT,
+                "content": sys_prompt,
             },
             {
                 "role": "user",
@@ -260,7 +318,7 @@ async def _call_openai_compatible_llm(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=75.0) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()

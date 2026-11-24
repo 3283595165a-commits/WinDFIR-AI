@@ -138,6 +138,30 @@ VULN_SIGNATURE_RULES: list[dict[str, Any]] = [
             "2. 禁用 WDigest 明文密码缓存，立即重置失陷域管账户及 `krbtgt` 账户密码（连续重置 2 次）。"
         ),
     },
+    {
+        "rule_id": "synaptics_worm_infection",
+        "cve_id": "MALWARE-WORM / ATT&CK T1547.001 & T1036.005",
+        "vuln_name": "Win32.Worm.Synaptics (\"怪兽\" / ._cache_ PE 文件感染型蠕虫木马)",
+        "component": "C:\\ProgramData\\Synaptics\\Synaptics.exe & 第三方破解工具 (xf-adsk / PatchXTRACT / DXF2XTRACT)",
+        "cvss_score": 9.3,
+        "severity": "critical",
+        "pattern": re.compile(
+            r"(programdata\\synaptics\\synaptics\.exe|\._cache_.*?\b|RunKey:怪兽)",
+            re.I,
+        ),
+        "principle": (
+            "该主机通过企业微信/U盘接收并运行了被感染的工程软件注册机/破解补丁（`xf-adsk2018_x64.exe`、`PatchXTRACTv308.exe`、`DXF2XTRACT.exe`）。"
+            "被 `Win32.Worm.Synaptics` (厂商伪造为“怪兽”) 感染的 `.exe` 在执行时，会将原始正常程序释放为同目录下的隐藏文件 `._cache_<原文件名>.exe` 并拉起，"
+            "同时在 `C:\\ProgramData\\Synaptics\\Synaptics.exe` 释放隐藏蠕虫母体（MD5: `727C12E23C6BA1A9AC360EFD675E2B93`），"
+            "并写入注册表 `HKLM\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run` 键（名称：`怪兽`）实现开机自启与全盘 `.exe` 感染。"
+        ),
+        "remediation": (
+            "1. 立即终止蠕虫进程：`taskkill /F /IM Synaptics.exe /T`；\n"
+            "2. 删除注册表自启动项：`reg delete \"HKLM\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run\" /v \"怪兽\" /f`；\n"
+            "3. 清除蠕虫母体文件：`attrib -h -s -r \"C:\\ProgramData\\Synaptics\\Synaptics.exe\" & del /f /q \"C:\\ProgramData\\Synaptics\\Synaptics.exe\"`；\n"
+            "4. 恢复被感染的业务程序：在桌面 `Xtract`、`C:\\Program Files (x86)\\TRC\\XTRACT` 及企业微信接收目录中，将被感染的外壳 `.exe` 删除，并将隐藏的 `._cache_<原文件名>.exe` 取消隐藏后重命名回原文件名！"
+        ),
+    },
 ]
 
 
@@ -320,6 +344,18 @@ RANSOMWARE_PATTERNS: list[dict[str, Any]] = [
         "advice": (
             "攻击者正在或已经执行删除 Windows 卷影副本 (`vssadmin delete shadows /all /quiet`)，"
             "请立即检查核心数据库文件是否已被加密，并在存储层/虚拟化层冻结快照！"
+        ),
+    },
+    {
+        "id": "synaptics_worm_family",
+        "category": "ransomware",
+        "name": "Win32.Worm.Synaptics (\"怪兽\" / ._cache_ PE 感染型蠕虫病毒)",
+        "severity": "critical",
+        "pattern": re.compile(r"(programdata\\synaptics\\synaptics\.exe|\._cache_.*?\b|RunKey:怪兽)", re.I),
+        "decryptor_status": "✅ 可无损恢复原程序！蠕虫将原版干净 .exe 重命名隐藏为同目录 `._cache_<原文件名>.exe`",
+        "advice": (
+            "先杀掉 `Synaptics.exe` (PID 13580) 并清理 `HKLM\\...\\Wow6432Node\\...\\Run\\怪兽` 启动项与 `C:\\ProgramData\\Synaptics\\Synaptics.exe` 母体，"
+            "随后将桌面/工程目录下被感染的 `.exe` 删除，把隐藏的 `._cache_*.exe` 取消隐藏并改回原名即可恢复干净程序！"
         ),
     },
 ]

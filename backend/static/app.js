@@ -61,21 +61,17 @@ const app = createApp({
     const timelinePage = ref(1);
     const timelinePageSize = ref(15);
 
-    // 5 大独立全屏页面导航: 'cases' (默认首页) | 'topology' | 'timeline' | 'ai_report' | 'remediation'
+    // 4 大独立全屏页面导航: 'cases' (默认首页) | 'timeline' | 'ai_report' | 'remediation'
     const currentPage = ref("cases");
     const workspaceTab = ref("overview");
     const rightTab = ref("profile");
 
     const switchPage = async (pageName) => {
-      currentPage.value = pageName;
-      if (pageName === "topology") {
-        await nextTick();
-        setTimeout(() => renderG6Topology(), 40);
-      }
+      currentPage.value = pageName === "topology" ? "ai_report" : pageName;
     };
 
     const switchWorkspaceTab = async (tabName) => {
-      await switchPage(tabName === "overview" ? "topology" : (tabName === "ai_intel" ? "ai_report" : tabName));
+      await switchPage(tabName === "overview" || tabName === "ai_intel" ? "ai_report" : tabName);
     };
 
     // 弹窗开关
@@ -345,10 +341,8 @@ const app = createApp({
         cveMatches.value = data.cve_matches || [];
         ransomwareRatAlerts.value = data.ransomware_rat_alerts || [];
         persistenceChecklist.value = data.persistence_checklist || [];
-        await nextTick();
-        renderG6Topology();
       } catch (err) {
-        showToast(`加载攻击拓扑图失败: ${err.message}`, "error");
+        showToast(`加载案件画像与修复建议失败: ${err.message}`, "error");
       } finally {
         loading.topology = false;
       }
@@ -574,23 +568,120 @@ const app = createApp({
       }
     };
 
+    // 各大主流 AI 厂商预设参数（含智谱 GLM Coding Plan、智谱标准开放平台、Google Gemini、Kimi 月之暗面、DeepSeek、通义千问、硅基流动等）
+    const providerPresets = {
+      zhipu_coding: {
+        config_name: "Zhipu-GLM-Coding-Plan",
+        base_url: "https://open.bigmodel.cn/api/coding/paas/v4",
+        model_name: "glm-4.6",
+        models: ["glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4-plus", "glm-4-flash"],
+        endpoints: [
+          { label: "OpenAI 协议 (Coding Plan 推荐)", url: "https://open.bigmodel.cn/api/coding/paas/v4" },
+          { label: "Anthropic 协议 (Coding Plan)", url: "https://open.bigmodel.cn/api/anthropic" },
+          { label: "OpenAI Response 协议", url: "https://open.bigmodel.cn/api/v1" },
+        ],
+        tip: "智谱 GLM Coding Plan 套餐专用：个人版与团队版 API Key 与标准 API 独立管理，支持 OpenAI Chat (paas/v4) 与 Anthropic 协议接入。",
+      },
+      zhipu: {
+        config_name: "Zhipu-BigModel-Standard",
+        base_url: "https://open.bigmodel.cn/api/paas/v4",
+        model_name: "glm-4-plus",
+        models: ["glm-4-plus", "glm-4.6", "glm-4.5", "glm-4-air", "glm-4-flash"],
+        endpoints: [
+          { label: "智谱开放平台标准 v4", url: "https://open.bigmodel.cn/api/paas/v4" },
+        ],
+        tip: "智谱开放平台 (open.bigmodel.cn) 标准按量计费 API，支持 GLM-4 全系列模型。",
+      },
+      gemini: {
+        config_name: "Google-Gemini-DFIR",
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model_name: "gemini-2.5-flash",
+        models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"],
+        endpoints: [
+          { label: "Google AI Studio (OpenAI 兼容)", url: "https://generativelanguage.googleapis.com/v1beta/openai" },
+        ],
+        tip: "使用 Google AI Studio (aistudio.google.com) 申请的 Gemini API Key，通过官方 OpenAI 兼容层直接调用。",
+      },
+      kimi: {
+        config_name: "Kimi-Moonshot-DFIR",
+        base_url: "https://api.moonshot.cn/v1",
+        model_name: "kimi-k2-0711-preview",
+        models: ["kimi-k2-0711-preview", "kimi-latest", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"],
+        endpoints: [
+          { label: "Moonshot 开放平台标准", url: "https://api.moonshot.cn/v1" },
+          { label: "Kimi For Coding 套餐", url: "https://api.kimi.com/coding/v1" },
+        ],
+        tip: "月之暗面 Kimi (platform.moonshot.cn)，支持超长上下文日志溯源与 Kimi K2 / Coding 套餐。",
+      },
+      deepseek: {
+        config_name: "DeepSeek-V3-DFIR",
+        base_url: "https://api.deepseek.com/v1",
+        model_name: "deepseek-chat",
+        models: ["deepseek-chat", "deepseek-reasoner"],
+        endpoints: [
+          { label: "DeepSeek 官方 API", url: "https://api.deepseek.com/v1" },
+        ],
+        tip: "深度求索官方接口：deepseek-chat 对应 DeepSeek-V3，deepseek-reasoner 对应 DeepSeek-R1 深度推理。",
+      },
+      qwen: {
+        config_name: "Qwen-Plus-DFIR",
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model_name: "qwen-plus",
+        models: ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-coder-plus"],
+        endpoints: [
+          { label: "阿里云百炼 DashScope 兼容接口", url: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+        ],
+        tip: "阿里云百炼 / 灵积平台 OpenAI 兼容接口。",
+      },
+      siliconflow: {
+        config_name: "SiliconFlow-DFIR",
+        base_url: "https://api.siliconflow.cn/v1",
+        model_name: "deepseek-ai/DeepSeek-V3",
+        models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen2.5-72B-Instruct", "THUDM/glm-4-9b-chat"],
+        endpoints: [
+          { label: "硅基流动官方 API", url: "https://api.siliconflow.cn/v1" },
+        ],
+        tip: "硅基流动 (SiliconFlow) 聚合平台，支持满血 DeepSeek-V3/R1、Qwen 与 GLM 开源模型。",
+      },
+      anthropic: {
+        config_name: "Anthropic-Claude-DFIR",
+        base_url: "https://api.anthropic.com",
+        model_name: "claude-sonnet-4-20250514",
+        models: ["claude-sonnet-4-20250514", "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest"],
+        endpoints: [
+          { label: "Anthropic 官方 Messages 协议", url: "https://api.anthropic.com" },
+        ],
+        tip: "原生支持 Anthropic Messages (/v1/messages) 协议及第三方 Claude 镜像转发地址。",
+      },
+      openai: {
+        config_name: "OpenAI-GPT4o-DFIR",
+        base_url: "https://api.openai.com/v1",
+        model_name: "gpt-4o",
+        models: ["gpt-4o", "gpt-4.1", "gpt-4o-mini", "o3-mini"],
+        endpoints: [
+          { label: "OpenAI 官方 API", url: "https://api.openai.com/v1" },
+        ],
+        tip: "支持 OpenAI 官方接口或任意兼容 OpenAI /v1/chat/completions 规范的中转网关。",
+      },
+      ollama: {
+        config_name: "Local-Ollama-DFIR",
+        base_url: "http://localhost:11434/v1",
+        model_name: "qwen2.5:14b",
+        models: ["qwen2.5:14b", "deepseek-r1:14b", "glm4:9b", "llama3.1:8b"],
+        endpoints: [
+          { label: "本机 Ollama (11434)", url: "http://localhost:11434/v1" },
+          { label: "本机 vLLM (8001)", url: "http://localhost:8001/v1" },
+        ],
+        tip: "纯内网涉密环境本地私有化部署（Ollama / vLLM / LM Studio），无需外网 API Key。",
+      },
+    };
+
     const onProviderChange = () => {
-      if (llmForm.provider === "deepseek") {
-        llmForm.base_url = "https://api.deepseek.com/v1";
-        llmForm.model_name = "deepseek-chat";
-        llmForm.config_name = "DeepSeek-V3-DFIR";
-      } else if (llmForm.provider === "openai") {
-        llmForm.base_url = "https://api.openai.com/v1";
-        llmForm.model_name = "gpt-4o";
-        llmForm.config_name = "OpenAI-GPT4o-DFIR";
-      } else if (llmForm.provider === "qwen") {
-        llmForm.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1";
-        llmForm.model_name = "qwen-plus";
-        llmForm.config_name = "Qwen-Plus-DFIR";
-      } else if (llmForm.provider === "ollama") {
-        llmForm.base_url = "http://localhost:11434/v1";
-        llmForm.model_name = "qwen2.5:14b";
-        llmForm.config_name = "Local-Ollama-DFIR";
+      const preset = providerPresets[llmForm.provider];
+      if (preset) {
+        llmForm.base_url = preset.base_url;
+        llmForm.model_name = preset.model_name;
+        llmForm.config_name = preset.config_name;
       }
     };
 
@@ -865,6 +956,7 @@ const app = createApp({
       industryMap,
       uploadForm,
       llmForm,
+      providerPresets,
       eventTitleMap,
       selectCase,
       submitNewCase,

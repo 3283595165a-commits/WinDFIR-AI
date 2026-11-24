@@ -551,4 +551,30 @@ async def simulate_industry_case(
     return await create_simulation_case(scenario_key=scenario_key, db=db)
 
 
+# ==============================================================================
+# 5. GET /api/cases/collector-download/{platform} : 一键下载 Windows / Linux 采集脚本
+# ==============================================================================
+@router.get("/collector-download/{platform}", summary="一键下载 Windows (.ps1) 或 Linux 抗篡改 (.sh) 应急采集脚本")
+async def download_collector_script(platform: str):
+    from fastapi.responses import FileResponse
+
+    collector_dir = get_app_root().parent / "collector"
+    if platform.lower() == "linux":
+        fpath = collector_dir / "linux_collector.sh"
+        fname = "linux_collector.sh"
+    else:
+        fpath = collector_dir / "win_collector.ps1"
+        fname = "win_collector.ps1"
+
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail=f"未找到采集脚本: {fname}")
+
+    return FileResponse(
+        path=str(fpath),
+        filename=fname,
+        media_type="application/octet-stream",
+    )
+
+
+
 

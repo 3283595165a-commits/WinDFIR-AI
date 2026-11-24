@@ -599,7 +599,648 @@ def _parse_single_evtx_file(evtx_path: Path) -> list[dict[str, Any]]:
     return results
 
 
-def _parse_exported_json_or_xml(file_path: Path) -> list[dict[str, Any]]:
+def _parse_thirdparty_collector_json(
+    source_name: str,
+    loaded: dict[str, Any],
+    snapshot_meta: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """
+    深度兼容解析第三方应急采集器（如 WindowsCollecter / Get-Logs-Tool / MXAT）导出的结构化 JSON 文件：
+    支持 SystemInformation.json, LogonItems.json, process_info.json, LastActivity.json,
+    Defender.json, PowerShell.json, Services.json, TaskSchedule.json, Smb.json, network_connections.json 等。
+    """
+    results: list[dict[str, Any]] = []
+    comp_name = (snapshot_meta or {}).get("hostname") or "WIN-HOST"
+
+    # 1. SystemInformation.json：提取主机名、OS 版本
+    if "SystemInformation" in loaded and isinstance(loaded["SystemInformation"], list):
+        for info in loaded["SystemInformation"]:
+            if not isinstance(info, dict):
+                continue
+            cname = info.get("ComputerName")
+            os_ver = info.get("OSVersion")
+            if snapshot_meta is not None:
+                if cname:
+                    snapshot_meta["hostname"] = str(cname).strip()
+                    comp_name = snapshot_meta["hostname"]
+                if os_ver:
+                    snapshot_meta["os_version"] = f"Windows ({os_ver})"
+        return results
+
+    # 2. network_connections.json：自动提取受检主机内网 IP
+    if "NetworkConnections" in loaded and isinstance(loaded["NetworkConnections"], list):
+        for conn in loaded["NetworkConnections"]:
+            if not isinstance(conn, dict):
+                continue
+            la = str(conn.get("LocalAddress") or "").strip()
+            if la and la not in ("0.0.0.0", "127.0.0.1", "::", "::1") and not la.startswith("169.254."):
+                if snapshot_meta is not None and not snapshot_meta.get("ip_address"):
+                    snapshot_meta["ip_address"] = la
+                break
+        return results
+
+    # 3. LogonItems.json：注册表 Run / 启动项持久化检测（精准捕获 C:\ProgramData\Synaptics\Synaptics.exe "怪兽" 蠕虫等）
+    if "LogonItems" in loaded and isinstance(loaded["LogonItems"], list):
+        for item in loaded["LogonItems"]:
+            if not isinstance(item, dict):
+                continue
+            entry = str(item.get("Entry") or "").strip()
+            loc = str(item.get("Entry Location") or "").strip()
+            img_path = str(item.get("Image Path") or item.get("Launch String") or "").strip()
+            company = str(item.get("Company") or "").strip()
+            file_hidden = bool(item.get("FileHidden"))
+            md5_val = str(item.get("MD5") or "").strip()
+            sha256_val = str(item.get("SHA-256") or "").strip()
+            t_str = str(item.get("FileCreatedTime") or item.get("Time") or "").strip()
+            ev_time = _parse_event_time(t_str) or datetime.utcnow()
+
+            if not img_path or entry.lower() == "desktop.ini":
+                continue
+
+            img_lower = img_path.lower()
+            is_synaptics_worm = "programdata\\synaptics\\synaptics.exe" in img_lower or company == "怪兽" or entry == "怪兽"
+            is_suspicious_path = any(
+                p in img_lower
+                for p in ("c:\\programdata\\", "users\\public", "appdata\\local\\temp", "\\temp\\", "wscript", "mshta", "powershell")
+            )
+
+            if is_synaptics_worm or is_suspicious_path or file_hidden:
+                risk_level = "critical" if (is_synaptics_worm or file_hidden) else "high"
+                tags = ["T1547.001", "注册表Run启动项持久化"]
+                if is_synaptics_worm:
+                    tags.extend(["Win32.Worm.Synaptics蠕虫木马", "伪装Synaptics驱动签名(怪兽)", "隐藏文件属性驻留"])
+                elif file_hidden:
+                    tags.append("隐藏文件属性自启动")
+
+                summary = (
+                    f"[注册表自启动后门] 启动项名: {entry} (厂商: {company or '未知'}), "
+                    f"路径: {img_path}, 注册表位置: {loc}, 隐藏属性: {file_hidden}, MD5: {md5_val}"
+                )
+                ev_dict: dict[str, Any] = {
+                    "artifact_type": "evtx_service",
+                    "source_file": source_name,
+                    "event_id": 7045,
+                    "event_time": ev_time,
+                    "summary": summary,
+                    "parsed_data": {
+                        "Computer": comp_name,
+                        "ServiceName": f"RunKey:{entry}",
+                        "ImagePath": img_path,
+                        "EntryLocation": loc,
+                        "Company": company,
+                        "FileHidden": file_hidden,
+                        "MD5": md5_val,
+                        "SHA256": sha256_val,
+                        "CommandLine": f'reg add "{loc}" /v "{entry}" /d "{img_path}"',
+                    },
+                    "raw_data": json.dumps(item, ensure_ascii=False),
+                    "risk_level": risk_level,
+                    "risk_tags": tags,
+                    "is_malicious": True,
+                }
+                if sha256_val or md5_val:
+                    ev_dict["extracted_ioc"] = {
+                        "ioc_type": "hash",
+                        "ioc_value": sha256_val or md5_val,
+                        "threat_level": "malicious",
+                        "tags": ["Win32.Worm.Synaptics", "Autorun_Persistence_Binary", f"MD5:{md5_val}"],
+                    }
+                results.append(ev_dict)
+        return results
+
+    # 4. process_info.json：活跃进程树排查
+    if "ProcessInfo" in loaded and isinstance(loaded["ProcessInfo"], list):
+        for proc in loaded["ProcessInfo"]:
+            if not isinstance(proc, dict):
+                continue
+            pname = str(proc.get("Name") or "").strip()
+            ppath = str(proc.get("Path") or "").strip()
+            cmd = str(proc.get("CommandLine") or ppath).strip()
+            pid = proc.get("PID")
+            ppid = proc.get("PPID")
+            parent = str(proc.get("Parent") or "").strip()
+            md5_val = str(proc.get("MD5") or "").strip()
+            ev_time = _parse_event_time(str(proc.get("Time") or "")) or datetime.utcnow()
+
+            if not ppath and not cmd:
+                continue
+
+            path_lower = ppath.lower()
+            is_synaptics_worm = "programdata\\synaptics\\synaptics.exe" in path_lower
+            is_programdata_proc = path_lower.startswith("c:\\programdata\\") and not is_synaptics_worm
+            matched_rules = [r for r in SUSPICIOUS_CMD_RULES if r[0].search(f"{ppath} {cmd}")]
+
+            if is_synaptics_worm or matched_rules or is_programdata_proc:
+                if is_synaptics_worm:
+                    risk_level = "critical"
+                    tags = ["T1036.005", "T1204.002", "活跃恶意进程驻留(Synaptics蠕虫)", "PE感染型木马进程"]
+                    is_mal = True
+                elif matched_rules:
+                    risk_level = "critical" if any(r[3] == "critical" for r in matched_rules) else "high"
+                    tags = list({r[1] for r in matched_rules} | {r[2] for r in matched_rules})
+                    is_mal = True
+                else:
+                    risk_level = "medium"
+                    tags = ["ProgramData非标准目录驻留进程"]
+                    is_mal = False
+
+                summary = (
+                    f"[活跃进程审计] 进程: {pname} (PID: {pid}, PPID: {ppid} {parent}), "
+                    f"路径: {ppath}, 命令行: {cmd[:180]}, MD5: {md5_val}"
+                )
+                ev_dict = {
+                    "artifact_type": "evtx_process",
+                    "source_file": source_name,
+                    "event_id": 4688,
+                    "event_time": ev_time,
+                    "summary": summary,
+                    "parsed_data": {
+                        "Computer": comp_name,
+                        "NewProcessName": ppath or pname,
+                        "NewProcessId": str(pid or ""),
+                        "ParentProcessId": str(ppid or ""),
+                        "ParentProcessName": parent,
+                        "CommandLine": cmd,
+                        "MD5": md5_val,
+                    },
+                    "raw_data": json.dumps(proc, ensure_ascii=False),
+                    "risk_level": risk_level,
+                    "risk_tags": tags,
+                    "is_malicious": is_mal,
+                }
+                if is_synaptics_worm and md5_val:
+                    ev_dict["extracted_ioc"] = {
+                        "ioc_type": "hash",
+                        "ioc_value": md5_val.upper(),
+                        "threat_level": "malicious",
+                        "tags": ["Win32.Worm.Synaptics_MD5", "Active_Malware_Process"],
+                    }
+                results.append(ev_dict)
+        return results
+
+    # 5. LastActivity.json：Prefetch / UserAssist / Amcache 历史执行痕迹还原
+    if "LastActivity" in loaded and isinstance(loaded["LastActivity"], list):
+        seen_exec: set[str] = set()
+        for act in loaded["LastActivity"]:
+            if not isinstance(act, dict):
+                continue
+            action_type = str(act.get("Action") or "").strip()
+            fname = str(act.get("FileName") or "").strip().replace("\x00", "")
+            fpath = str(act.get("FilePath") or act.get("TargetPath") or "").strip().replace("\x00", "")
+            comment = str(act.get("Comment") or "").strip().replace("\x00", "")
+            t_str = str(act.get("Time") or "").strip()
+            ev_time = _parse_event_time(t_str)
+
+            fp_lower = fpath.lower()
+            fn_lower = fname.lower()
+
+            is_worm_cache = fn_lower.startswith("._cache_") or "\\._cache_" in fp_lower
+            is_synaptics_exec = "programdata\\synaptics\\synaptics.exe" in fp_lower
+            is_crack_carrier = any(
+                k in fp_lower for k in ("xf-adsk", "patchxtract", "crackxtract", "dxf2xtract.exe")
+            ) and action_type in ("Run executable file", "User assist", "用户打开应用程序")
+
+            if is_worm_cache or is_synaptics_exec or is_crack_carrier:
+                dedup_key = f"{t_str}:{fn_lower}:{fp_lower}"
+                if dedup_key in seen_exec:
+                    continue
+                seen_exec.add(dedup_key)
+
+                if is_synaptics_exec:
+                    risk_level = "critical"
+                    tags = ["T1036.005", "Synaptics蠕虫母体执行(Prefetch)", "恶意程序落地运行"]
+                    summary = f"[恶意程序执行痕迹] 蠕虫母体 {fpath} 被触发运行 ({action_type}: {comment})"
+                    is_mal = True
+                elif is_worm_cache:
+                    risk_level = "critical"
+                    tags = ["T1204.002", "T1036.005", "._cache_感染型蠕虫释放原程序痕迹", "PE文件感染实锤"]
+                    summary = (
+                        f"[PE感染型蠕虫活动实锤] 检出蠕虫隐藏宿主缓存程序执行: {fname} "
+                        f"(路径: {fpath}, 来源: {comment}) —— 证明原可执行文件已被 Synaptics(怪兽) 蠕虫感染寄生！"
+                    )
+                    is_mal = True
+                else:
+                    risk_level = "high"
+                    tags = ["T1204.002", "疑似带毒破解工具/注册机初始投递源"]
+                    summary = f"[带毒载体执行记录] 用户运行了疑似携带蠕虫的破解补丁/工程工具: {fname} (路径: {fpath})"
+                    is_mal = True
+
+                results.append(
+                    {
+                        "artifact_type": "evtx_process",
+                        "source_file": source_name,
+                        "event_id": 4688,
+                        "event_time": ev_time,
+                        "summary": summary,
+                        "parsed_data": {
+                            "Computer": comp_name,
+                            "NewProcessName": fpath or fname,
+                            "ParentProcessName": "explorer.exe (UserExecution)",
+                            "CommandLine": fpath or fname,
+                            "ActionType": action_type,
+                            "ForensicSource": comment,
+                        },
+                        "raw_data": json.dumps(act, ensure_ascii=False).replace("\x00", ""),
+                        "risk_level": risk_level,
+                        "risk_tags": tags,
+                        "is_malicious": is_mal,
+                    }
+                )
+        return results
+
+    # 6. Defender.json：Windows Defender 实时保护关闭与告警日志
+    if "Defender" in loaded and isinstance(loaded["Defender"], list):
+        for d in loaded["Defender"]:
+            if not isinstance(d, dict):
+                continue
+            eid_str = str(d.get("EventId") or "5001")
+            dtype = str(d.get("Type") or "")
+            desc = str(d.get("Description") or "")
+            t_str = str(d.get("Time") or "")
+            ev_time = _parse_event_time(t_str)
+            cname = str(d.get("Computer") or comp_name)
+            risk_level = "high" if eid_str in ("5001", "1116", "1117") else "medium"
+            tags = ["T1562.001", f"Defender_{dtype or eid_str}", "削弱安全防御/关闭实时保护"]
+
+            results.append(
+                {
+                    "artifact_type": "evtx_process",
+                    "source_file": source_name,
+                    "event_id": 4688,
+                    "event_time": ev_time,
+                    "summary": f"[Windows Defender 安全告警 Event {eid_str}] {dtype}: {desc}",
+                    "parsed_data": {
+                        "Computer": cname,
+                        "NewProcessName": "MsMpEng.exe (Windows Defender)",
+                        "CommandLine": f"Defender Event {eid_str} ({dtype}): {desc}",
+                        "DefenderData": d.get("Data"),
+                    },
+                    "raw_data": json.dumps(d, ensure_ascii=False),
+                    "risk_level": risk_level,
+                    "risk_tags": tags,
+                    "is_malicious": risk_level == "high",
+                }
+            )
+        return results
+
+    # 7. Smb.json：本机对外发起的 SMB 认证失败 / 连接异常聚合
+    if "Smb" in loaded and isinstance(loaded["Smb"], list):
+        peer_Map: dict[str, dict[str, Any]] = {}
+        for s in loaded["Smb"]:
+            if not isinstance(s, dict):
+                continue
+            peer = str(s.get("PeerName") or s.get("PeerAddress") or s.get("PrincipalName") or "").strip().lstrip("\\")
+            if not peer:
+                continue
+            if peer not in peer_Map:
+                peer_Map[peer] = {
+                    "count": 0,
+                    "first_time": s.get("Time"),
+                    "last_time": s.get("Time"),
+                    "types": set(),
+                    "sample": s,
+                }
+            peer_Map[peer]["count"] += 1
+            peer_Map[peer]["last_time"] = s.get("Time")
+            peer_Map[peer]["types"].add(str(s.get("Type") or s.get("EventId") or ""))
+
+        for peer, info in peer_Map.items():
+            cnt = info["count"]
+            types_str = ", ".join(sorted(info["types"]))
+            is_auth_fail = "SessionSetupFailed" in types_str
+            risk_level = "high" if is_auth_fail else "medium"
+            ev_time = _parse_event_time(str(info["last_time"] or info["first_time"] or ""))
+            results.append(
+                {
+                    "artifact_type": "evtx_logon",
+                    "source_file": source_name,
+                    "event_id": 4625,
+                    "event_time": ev_time,
+                    "summary": (
+                        f"[SMB 异常连接/认证审计] 本机向内网节点 {peer} 发起 SMB 通信失败共 {cnt} 次 "
+                        f"(类型: {types_str}) —— 需排查蠕虫局域网共享感染探测或凭据协商异常"
+                    ),
+                    "parsed_data": {
+                        "Computer": comp_name,
+                        "IpAddress": peer,
+                        "TargetUserName": "SMB_Client_Session",
+                        "LogonType": "3",
+                        "LogonTypeDesc": f"SMB ({types_str})",
+                        "FailureCount": cnt,
+                    },
+                    "raw_data": json.dumps(info["sample"], ensure_ascii=False),
+                    "risk_level": risk_level,
+                    "risk_tags": ["T1021.002", "SMB共享连接异常", f"累计失败{cnt}次"],
+                    "is_malicious": is_auth_fail,
+                }
+            )
+        return results
+
+    # 8. PowerShell.json：提取可疑 Bypass / Hidden / Temp 脚本执行记录（去重防刷屏）
+    if "PowerShell" in loaded and isinstance(loaded["PowerShell"], list):
+        seen_ps: set[str] = set()
+        for ps in loaded["PowerShell"]:
+            if not isinstance(ps, dict):
+                continue
+            host_app = str(ps.get("HostApplication") or "").strip()
+            script_blk = str(ps.get("ScriptBlock") or "").strip()
+            combined = f"{host_app} {script_blk}".strip()
+            if not combined:
+                continue
+            if not re.search(r"(bypass|hidden|-enc|frombase64|downloadstring|temp\\|new-eventlog|remove-appxpackage)", combined, re.I):
+                continue
+            norm_key = re.sub(r"probe\d+_\d+", "probe_PID_RAND", combined)
+            if norm_key in seen_ps:
+                continue
+            seen_ps.add(norm_key)
+
+            ev_time = _parse_event_time(str(ps.get("Time") or ""))
+            is_high = bool(re.search(r"(-enc|frombase64|downloadstring|iex\b)", combined, re.I))
+            results.append(
+                {
+                    "artifact_type": "evtx_process",
+                    "source_file": source_name,
+                    "event_id": 4688,
+                    "event_time": ev_time,
+                    "summary": f"[PowerShell 脚本审计] {combined[:220]}",
+                    "parsed_data": {
+                        "Computer": comp_name,
+                        "NewProcessName": "powershell.exe",
+                        "CommandLine": combined,
+                    },
+                    "raw_data": json.dumps(ps, ensure_ascii=False),
+                    "risk_level": "high" if is_high else "medium",
+                    "risk_tags": ["T1059.001", "PowerShell_ExecutionPolicy_Bypass"],
+                    "is_malicious": is_high,
+                }
+            )
+        return results
+
+    return results
+
+
+def _parse_linux_snapshot_json(
+    source_name: str,
+    loaded: dict[str, Any],
+    snapshot_meta: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """
+    深度解析 `linux_collector.sh` 生成的 `linux_snapshot.json` 抗命令篡改取证包：
+    1. 校验被篡改的系统命令 (`tampered_binaries`: RPM/DPKG 哈希失配、非 ELF 脚本调包、Inode ctime!=mtime 时间戳伪造)
+    2. 识别 `/proc` 隐藏进程 (`hidden_from_ps`)、已删除无文件木马 (`(deleted)`)、LD_PRELOAD 环境变量劫持
+    3. 识别 `/proc/net/tcp` 异常外连与 C2 通信
+    4. 识别 12 大持久化后门 (`ld.so.preload`、Cron、Systemd、Shell Profile、UID=0 克隆账户、SSH 公钥) 与 `lsattr +i/+a` 防删锁
+    """
+    results: list[dict[str, Any]] = []
+    comp_name = str(loaded.get("hostname") or "LINUX-SERVER").strip()
+    ip_addr = str(loaded.get("ip_address") or "").strip()
+    os_ver = str(loaded.get("os_version") or "Linux Server").strip()
+    snap_time = _parse_event_time(str(loaded.get("collected_at") or "")) or datetime.utcnow()
+
+    if snapshot_meta is not None:
+        if comp_name:
+            snapshot_meta["hostname"] = comp_name
+        if ip_addr:
+            snapshot_meta["ip_address"] = ip_addr
+        if os_ver:
+            snapshot_meta["os_version"] = os_ver
+
+    # 1. 被篡改的 Linux 系统命令与时间戳伪造 (tampered_binaries)
+    for tb in loaded.get("tampered_binaries") or []:
+        if not isinstance(tb, dict):
+            continue
+        bpath = str(tb.get("path") or "").strip()
+        vstatus = str(tb.get("verify_status") or "HASH_MISMATCH").strip()
+        ctime_s = str(tb.get("ctime") or "").strip()
+        mtime_s = str(tb.get("mtime") or "").strip()
+        sha256_s = str(tb.get("sha256") or "").strip()
+        timestomped = bool(tb.get("timestomped"))
+        ev_time = _parse_event_time(ctime_s) or snap_time
+
+        tags = ["T1014", "T1036.005", "Linux系统命令被篡改(Rootkit)", vstatus]
+        if timestomped:
+            tags.append("T1070.006_时间戳伪造(ctime与mtime背离)")
+
+        summary = (
+            f"[Linux 系统命令篡改实锤] 核心命令 {bpath} 校验异常 ({vstatus})！"
+            f"真实 Inode 变更时间(ctime): {ctime_s} vs 表面修改时间(mtime): {mtime_s}, SHA256: {sha256_s[:32]}..."
+        )
+        ev_dict: dict[str, Any] = {
+            "artifact_type": "linux_rootkit_binary",
+            "source_file": source_name,
+            "event_id": 7045,
+            "event_time": ev_time,
+            "summary": summary,
+            "parsed_data": {
+                "Computer": comp_name,
+                "ServiceName": f"TamperedBinary:{bpath}",
+                "ImagePath": bpath,
+                "VerifyStatus": vstatus,
+                "InodeCtime": ctime_s,
+                "ForgedMtime": mtime_s,
+                "Timestomped": timestomped,
+                "SHA256": sha256_s,
+                "CommandLine": f"rpm -Vf {bpath} -> {vstatus} (ctime={ctime_s}, mtime={mtime_s})",
+            },
+            "raw_data": json.dumps(tb, ensure_ascii=False),
+            "risk_level": "critical",
+            "risk_tags": tags,
+            "is_malicious": True,
+        }
+        if sha256_s:
+            ev_dict["extracted_ioc"] = {
+                "ioc_type": "hash",
+                "ioc_value": sha256_s,
+                "threat_level": "malicious",
+                "tags": ["Linux_Trojanized_Binary", bpath],
+            }
+        results.append(ev_dict)
+
+    # 2. 12 大持久化后门与 /etc/ld.so.preload 劫持 (persistence_items)
+    for item in loaded.get("persistence_items") or []:
+        if not isinstance(item, dict):
+            continue
+        cat = str(item.get("category") or "linux_persistence")
+        ppath = str(item.get("path") or "")
+        content = str(item.get("content") or "")
+        ctime_s = str(item.get("ctime") or "")
+        mtime_s = str(item.get("mtime") or "")
+        sev = str(item.get("severity") or "critical")
+        ev_time = _parse_event_time(ctime_s) or snap_time
+
+        eid = 4720 if cat == "uid0_clone_user" else 7045
+        tags = ["T1053.003", f"Linux持久化_{cat}"]
+        if cat == "ld_so_preload_rootkit":
+            tags = ["T1574.006", "ld.so.preload动态库劫持Rootkit", "全局隐藏进程与端口"]
+
+        summary = f"[Linux 持久化后门: {cat}] 路径: {ppath} | 内容: {content} (Inode ctime: {ctime_s})"
+        results.append(
+            {
+                "artifact_type": "linux_persistence",
+                "source_file": source_name,
+                "event_id": eid,
+                "event_time": ev_time,
+                "summary": summary,
+                "parsed_data": {
+                    "Computer": comp_name,
+                    "ServiceName": f"{cat}:{ppath}",
+                    "ImagePath": ppath,
+                    "CommandLine": content,
+                    "TargetUserName": content.split(":")[0] if eid == 4720 else "root",
+                    "InodeCtime": ctime_s,
+                    "ForgedMtime": mtime_s,
+                },
+                "raw_data": json.dumps(item, ensure_ascii=False),
+                "risk_level": sev if sev in ("critical", "high", "medium") else "critical",
+                "risk_tags": tags,
+                "is_malicious": True,
+            }
+        )
+
+    # 3. lsattr +i / +a 不可变防删锁检测 (immutable_files)
+    for im in loaded.get("immutable_files") or []:
+        if not isinstance(im, dict):
+            continue
+        fpath = str(im.get("path") or "")
+        attr = str(im.get("attributes") or "")
+        results.append(
+            {
+                "artifact_type": "linux_immutable_lock",
+                "source_file": source_name,
+                "event_id": 7045,
+                "event_time": snap_time,
+                "summary": f"[chattr 防删锁告警] 文件 {fpath} 被恶意添加不可变属性 ({attr})，导致 root 无法直接修改或清除！",
+                "parsed_data": {
+                    "Computer": comp_name,
+                    "ServiceName": f"ImmutableLock:{fpath}",
+                    "ImagePath": fpath,
+                    "Attributes": attr,
+                    "CommandLine": f"chattr +i {fpath} (lsattr: {attr})",
+                },
+                "raw_data": json.dumps(im, ensure_ascii=False),
+                "risk_level": "critical",
+                "risk_tags": ["T1222.002", "chattr_+i_防删锁", "顽固木马防清除机制"],
+                "is_malicious": True,
+            }
+        )
+
+    # 4. /proc 内核直读隐藏进程、无文件 deleted 进程与异常守护进程 (processes)
+    for proc in loaded.get("processes") or []:
+        if not isinstance(proc, dict):
+            continue
+        pid = proc.get("pid")
+        ppid = proc.get("ppid")
+        comm = str(proc.get("comm") or "")
+        exe = str(proc.get("exe") or "")
+        cmd = str(proc.get("cmdline") or "")
+        hidden = bool(proc.get("hidden_from_ps"))
+        deleted = bool(proc.get("is_deleted_binary"))
+        ld_pre = str(proc.get("ld_preload") or "")
+        st_time = _parse_event_time(str(proc.get("start_time") or "")) or snap_time
+
+        combined = f"{comm} {exe} {cmd} {ld_pre}".lower()
+        is_susp_linux = any(
+            k in combined
+            for k in ("/tmp/", "/dev/shm/", "/var/tmp/", "/dev/tcp/", "xmrig", "kdevtmpfsi", "kinsing", "cryptonight", "stratum+tcp", "base64 -d", "curl ", "wget ")
+        )
+        if hidden or deleted or ld_pre or is_susp_linux:
+            tags = ["T1059.004"]
+            if hidden:
+                tags.append("T1014_Rootkit隐藏进程(ps不可见但/proc存在)")
+            if deleted:
+                tags.append("T1070.004_无文件内存驻留(二进制已删除deleted)")
+            if ld_pre:
+                tags.append("T1574.006_LD_PRELOAD进程注入")
+            if is_susp_linux:
+                tags.append("Linux恶意载荷/挖矿或远控守护进程")
+
+            summary = (
+                f"[/proc 内核直读异常进程] PID: {pid} (PPID: {ppid}), 进程名: {comm}, "
+                f"真实路径: {exe or '无'}, 隐藏于ps: {hidden}, 已删文件: {deleted}, 命令行: {cmd}"
+            )
+            results.append(
+                {
+                    "artifact_type": "linux_proc_process",
+                    "source_file": source_name,
+                    "event_id": 4688,
+                    "event_time": st_time,
+                    "summary": summary,
+                    "parsed_data": {
+                        "Computer": comp_name,
+                        "NewProcessName": exe or comm,
+                        "NewProcessId": str(pid or ""),
+                        "ParentProcessId": str(ppid or ""),
+                        "CommandLine": cmd,
+                        "HiddenFromPs": hidden,
+                        "DeletedBinary": deleted,
+                        "LD_PRELOAD": ld_pre,
+                    },
+                    "raw_data": json.dumps(proc, ensure_ascii=False),
+                    "risk_level": "critical" if (hidden or deleted or is_susp_linux) else "high",
+                    "risk_tags": tags,
+                    "is_malicious": True,
+                }
+            )
+
+    # 5. /proc/net/tcp 异常外连与 C2 通信 (network_connections)
+    for conn in loaded.get("network_connections") or []:
+        if not isinstance(conn, dict):
+            continue
+        rip = str(conn.get("remote_ip") or "")
+        rport = conn.get("remote_port")
+        state = str(conn.get("state") or "")
+        pid = conn.get("pid")
+        comm = str(conn.get("comm") or "")
+        exe = str(conn.get("exe") or "")
+        cmd = str(conn.get("cmdline") or "")
+        if rip in ("0.0.0.0", "127.0.0.1", "::", "::1", "") or state == "LISTEN":
+            continue
+        is_susp_conn = any(
+            k in f"{comm} {exe} {cmd}".lower()
+            for k in ("(deleted)", "/tmp/", "/dev/shm", "xmrig", "kdevtmpfsi", "kinsing", "bash", "sh", "python", "nc", "curl")
+        ) or rport in (3333, 4444, 5555, 6666, 7777, 8888, 9999, 14444)
+        if is_susp_conn:
+            ev_dict = {
+                "artifact_type": "linux_proc_net",
+                "source_file": source_name,
+                "event_id": 4624,
+                "event_time": snap_time,
+                "summary": (
+                    f"[/proc/net/tcp 隐藏外连捕获] 进程 {comm} (PID: {pid}, 路径: {exe}) "
+                    f"正在连接外部地址 {rip}:{rport} (状态: {state})"
+                ),
+                "parsed_data": {
+                    "Computer": comp_name,
+                    "IpAddress": rip,
+                    "RemotePort": rport,
+                    "ProcessName": comm,
+                    "PID": pid,
+                    "ImagePath": exe,
+                    "CommandLine": cmd,
+                    "LogonType": "3",
+                    "LogonTypeDesc": f"TCP_{state}_C2",
+                    "TargetUserName": "root",
+                },
+                "raw_data": json.dumps(conn, ensure_ascii=False),
+                "risk_level": "critical",
+                "risk_tags": ["T1071", "Linux_C2_或矿池外连(/proc/net/tcp)"],
+                "is_malicious": True,
+                "extracted_ioc": {
+                    "ioc_type": "ip",
+                    "ioc_value": rip,
+                    "threat_level": "malicious",
+                    "tags": ["Linux_C2_or_MiningPool", f"Port:{rport}", f"Proc:{comm}"],
+                },
+            }
+            results.append(ev_dict)
+
+    return results
+
+
+def _parse_exported_json_or_xml(
+    file_path: Path,
+    snapshot_meta: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
     """
     兼容解析采集包中导出的 JSON / JSONL / XML 格式事件快照
     """
@@ -631,6 +1272,22 @@ def _parse_exported_json_or_xml(file_path: Path) -> list[dict[str, Any]]:
                 if isinstance(loaded, list):
                     records = [r for r in loaded if isinstance(r, dict)]
                 elif isinstance(loaded, dict):
+                    # 1. 优先检测是否为 Linux 抗篡改采集包 (linux_snapshot.json)
+                    if loaded.get("os_family") == "linux" or "tampered_binaries" in loaded:
+                        return _parse_linux_snapshot_json(source_name, loaded, snapshot_meta)
+                    # 2. 检测是否为第三方采集器 (WindowsCollecter / Get-Logs-Tool) 结构化 JSON
+                    thirdparty_keys = {
+                        "SystemInformation",
+                        "LogonItems",
+                        "ProcessInfo",
+                        "LastActivity",
+                        "Defender",
+                        "Smb",
+                        "PowerShell",
+                        "NetworkConnections",
+                    }
+                    if any(k in loaded for k in thirdparty_keys):
+                        return _parse_thirdparty_collector_json(source_name, loaded, snapshot_meta)
                     # 兼容采集器生成的 system_snapshot.json 结构
                     if "processes" in loaded or "network_connections" in loaded or "hostname" in loaded:
                         snap_host = loaded.get("hostname") or loaded.get("Hostname") or "UNKNOWN-HOST"
@@ -737,6 +1394,15 @@ def _extract_and_parse_archive_sync(archive_path_str: str) -> dict[str, Any]:
     elif path_obj.is_file() and path_obj.suffix.lower() == ".zip":
         with tempfile.TemporaryDirectory(prefix="windfir_extract_") as tmp_dir:
             extracted_paths = _safe_extract_zip(path_obj, Path(tmp_dir))
+            # 优先解析 SystemInformation.json / network_connections.json / system_snapshot.json 获取真实主机名与内网 IP
+            extracted_paths.sort(
+                key=lambda p: (
+                    0
+                    if p.name.lower() in ("systeminformation.json", "network_connections.json", "system_snapshot.json")
+                    else 1,
+                    p.name.lower(),
+                )
+            )
             for fpath in extracted_paths:
                 ext = fpath.suffix.lower()
                 if ext == ".evtx":
@@ -748,8 +1414,8 @@ def _extract_and_parse_archive_sync(archive_path_str: str) -> dict[str, Any]:
                         parse_errors.append(str(err))
                 elif ext in (".xml", ".json", ".jsonl"):
                     _try_read_snapshot_meta(fpath)
-                    events = _parse_exported_json_or_xml(fpath)
-                    if events:
+                    events = _parse_exported_json_or_xml(fpath, snapshot_meta)
+                    if events or fpath.name.lower() in ("systeminformation.json", "network_connections.json"):
                         all_events.extend(events)
                         if fpath.name not in parsed_files:
                             parsed_files.append(fpath.name)
